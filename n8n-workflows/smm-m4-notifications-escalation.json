@@ -1,0 +1,150 @@
+{
+  "name": "SMM-M4 Notifications & Escalation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smm/escalate",
+        "responseMode": "responseNode"
+      },
+      "id": "1477494e-b67e-4ac7-a7e9-b79b66e8c951",
+      "name": "Escalation Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/messages",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "eq.{{ $json.body.messageId }}"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "6a7bb0f1-f525-4b8e-9bbf-3ba5ee3ec01f",
+      "name": "Fetch Original Inbound Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.RESEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  from: $env.SYSTEM_SENDER_EMAIL || \"social-alerts@yourdomain.com\",\n  to: [$env.OWNER_NOTIFICATION_EMAIL],\n  subject: \"⚠️ Social Message Escalation Required\",\n  html: `<p>A customer interaction on social media requires human review:</p>\n<blockquote>${$json[0]?.body || 'Inbound message'}</blockquote>\n<p><strong>Suggested AI Draft:</strong></p>\n<blockquote>${$('Escalation Webhook').first().json.body.reply || 'None'}</blockquote>\n<p><a href=\\\"${$env.LINK_TO_YOUR_DASHBOARD || 'https://dashboard.yourdomain.com'}/smm/inbox\\\">Open Social Inbox</a></p>`\n}) }}"
+      },
+      "id": "59673448-8372-4240-bc99-28e430a39153",
+      "name": "Alert Owner via Resend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, escalated: true }) }}"
+      },
+      "id": "70f570f1-f926-443f-a6bc-ed2d19cbf7e6",
+      "name": "Respond Escalation Logged",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        820,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Escalation Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Original Inbound Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Original Inbound Message": {
+      "main": [
+        [
+          {
+            "node": "Alert Owner via Resend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Owner via Resend": {
+      "main": [
+        [
+          {
+            "node": "Respond Escalation Logged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c6bedefa-a2a1-489b-86c3-f2b2d04d71cf",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "automation-suite"
+  },
+  "id": "b4d9edcc",
+  "tags": []
+}

@@ -1,0 +1,218 @@
+{
+  "name": "SMM-P1 Content Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smm/idea-intake",
+        "responseMode": "responseNode"
+      },
+      "id": "f59d8956-8867-4d66-a7c8-1ee34f91b2a6",
+      "name": "Content Idea Intake Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body || $json;\n\nconst topic = (body.topic || '').trim();\nconst keyMessage = (body.key_message || body.message || '').trim();\nconst targetPlatforms = body.target_platforms || ['linkedin', 'x', 'instagram'];\nconst targetDate = body.target_date || new Date(Date.now() + 24*3600*1000).toISOString();\n\nif (!topic || !keyMessage) {\n  throw new Error(\"Topic and Key Message are required for content intake.\");\n}\n\nreturn [{\n  json: {\n    topic,\n    keyMessage,\n    targetPlatforms,\n    targetDate,\n    mediaRefs: body.media_refs || []\n  }\n}];"
+      },
+      "id": "26b646c1-9245-411a-9316-9f12aa563128",
+      "name": "Validate Content Idea",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/content_ideas",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  topic: $json.topic,\n  key_message: $json.keyMessage,\n  target_platforms: $json.targetPlatforms,\n  target_date: $json.targetDate,\n  media_refs: $json.mediaRefs,\n  status: 'idea'\n}) }}"
+      },
+      "id": "ac6f46a7-60e3-40c4-a07a-8a7be780b28f",
+      "name": "Insert Content Idea in DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  idea_id: $json[0].id,\n  approval_policy: 'approve'\n}) }}"
+      },
+      "id": "43e9c126-269d-4e15-b323-8701550406a7",
+      "name": "Create Post Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_N8N_INSTANCE }}/webhook/smm/variants",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $json[0].id }) }}"
+      },
+      "id": "7e2d7e87-0faf-41f8-b0d6-5c0f6ddfa886",
+      "name": "Trigger SMM-P2 Variants",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1060,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, ideaId: $('Insert Content Idea in DB').first().json[0].id }) }}"
+      },
+      "id": "fc575aa2-6fad-4456-bb7a-67b392f875e1",
+      "name": "Respond Intake OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Content Idea Intake Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Content Idea",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Content Idea": {
+      "main": [
+        [
+          {
+            "node": "Insert Content Idea in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Content Idea in DB": {
+      "main": [
+        [
+          {
+            "node": "Create Post Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Post Record": {
+      "main": [
+        [
+          {
+            "node": "Trigger SMM-P2 Variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger SMM-P2 Variants": {
+      "main": [
+        [
+          {
+            "node": "Respond Intake OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "826e176b-07dc-4b50-8dc2-a486e9727573",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "automation-suite"
+  },
+  "id": "92d02747",
+  "tags": []
+}

@@ -1,0 +1,251 @@
+{
+  "name": "SMM-M2 LLM Response Builder",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smm/response-builder",
+        "responseMode": "onReceived"
+      },
+      "id": "ad7a878d-82ab-4718-9012-2de092c0a2bf",
+      "name": "Response Builder Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/messages",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "eq.{{ $json.body.messageId }}"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "0cd1a2be-3680-4213-b682-ca91616d5b0a",
+      "name": "Fetch Message & Brand Voice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"gpt-4o\",\n  response_format: { type: \"json_object\" },\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are a brand social assistant. Assess incoming message for sentiment, complaints, or custom pricing. Ground answers strictly in company facts. Return JSON: { \\\"reply\\\": string, \\\"confidence\\\": number, \\\"needs_human\\\": boolean, \\\"sentiment\\\": \\\"positive|neutral|negative|spam\\\" }\"\n    },\n    { role: \"user\", content: $json[0].body }\n  ]\n}) }}"
+      },
+      "id": "d236603d-9cc6-4745-a61c-704a9cddb250",
+      "name": "LLM Response & Risk Assessment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const res = JSON.parse($json.choices[0].message.content);\nconst msgId = $('Fetch Message & Brand Voice').first().json[0].id;\n\nconst canAutoReply = res.confidence >= 0.85 && !res.needs_human && res.sentiment !== 'negative';\n\nreturn [{\n  json: {\n    messageId: msgId,\n    reply: res.reply,\n    canAutoReply,\n    needsHuman: !canAutoReply,\n    confidence: res.confidence\n  }\n}];"
+      },
+      "id": "604ea54e-fa4b-4567-9987-c8b7308f4e78",
+      "name": "Evaluate Decision Policy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.canAutoReply }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "f697327f-05ea-4fcc-b36c-29b2f9c071e5",
+      "name": "Can Auto Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_N8N_INSTANCE }}/webhook/smm/dispatch",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "21950cd9-f64c-42e7-b8da-a9321fba97a5",
+      "name": "Trigger SMM-M3 Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1300,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_N8N_INSTANCE }}/webhook/smm/escalate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "98ff1133-a4bb-450e-aa98-e83f2676e4f9",
+      "name": "Trigger SMM-M4 Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1300,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Response Builder Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Message & Brand Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Message & Brand Voice": {
+      "main": [
+        [
+          {
+            "node": "LLM Response & Risk Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Response & Risk Assessment": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Decision Policy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Decision Policy": {
+      "main": [
+        [
+          {
+            "node": "Can Auto Reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can Auto Reply?": {
+      "main": [
+        [
+          {
+            "node": "Trigger SMM-M3 Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Trigger SMM-M4 Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c739b538-08c7-4ea7-afa7-8dbfc7675714",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "automation-suite"
+  },
+  "id": "1f739b58",
+  "tags": []
+}

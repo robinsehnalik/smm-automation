@@ -1,0 +1,134 @@
+{
+  "name": "SMM-P4 Notifications & Metrics",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f67fbe6f-1a0d-4fa8-a365-3c2164aa5e8c",
+      "name": "Daily Metrics Poll Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/post_variants",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "eq.published"
+            },
+            {
+              "name": "select",
+              "value": "id,platform,platform_post_id"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "7fa1f0ec-9464-44af-9ead-9f2d81a0bdef",
+      "name": "Fetch Published Variants",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/post_metrics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  variant_id: $json[0]?.id || 'mock',\n  impressions: 250,\n  likes: 18,\n  comments: 3,\n  shares: 2\n}) }}"
+      },
+      "id": "35f8e4af-3127-4b18-878f-11ced72d20f9",
+      "name": "Save Metrics Snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        580,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Metrics Poll Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Published Variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Published Variants": {
+      "main": [
+        [
+          {
+            "node": "Save Metrics Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "042f7b56-092a-4a9d-95c2-d5376f86d6c8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "automation-suite"
+  },
+  "id": "8c17dfb5",
+  "tags": []
+}

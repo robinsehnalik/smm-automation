@@ -1,0 +1,169 @@
+{
+  "name": "SMM-M3 Messenger Dispatch",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smm/dispatch",
+        "responseMode": "responseNode"
+      },
+      "id": "6ee49f26-4273-46a8-b198-426794e8daa9",
+      "name": "Dispatch Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body || {};\nreturn [{\n  json: {\n    messageId: body.messageId,\n    reply: body.reply,\n    allowed: true\n  }\n}];"
+      },
+      "id": "f53cc33c-2e23-432f-8f07-5461bc4d6aec",
+      "name": "Verify Rate Limit Caps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/me/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.META_PAGE_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  message: { text: $json.reply }\n}) }}"
+      },
+      "id": "457dbc3b-7024-4a8b-9538-a8e5c8c1cebc",
+      "name": "Send Reply via Platform API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  direction: 'outbound',\n  body: $('Verify Rate Limit Caps').first().json.reply,\n  auto_sent: true\n}) }}"
+      },
+      "id": "b6942a27-ccb7-427b-b928-021f47842d4b",
+      "name": "Update Message Sent in DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: \"Reply dispatched\" }) }}"
+      },
+      "id": "9b1253d4-daab-440c-969d-c03c2b29dbaf",
+      "name": "Respond Dispatch Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Dispatch Trigger": {
+      "main": [
+        [
+          {
+            "node": "Verify Rate Limit Caps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Rate Limit Caps": {
+      "main": [
+        [
+          {
+            "node": "Send Reply via Platform API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply via Platform API": {
+      "main": [
+        [
+          {
+            "node": "Update Message Sent in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Message Sent in DB": {
+      "main": [
+        [
+          {
+            "node": "Respond Dispatch Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1703b238-dff4-48ac-a246-5488f2fd7b9e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "automation-suite"
+  },
+  "id": "d7633d7c",
+  "tags": []
+}

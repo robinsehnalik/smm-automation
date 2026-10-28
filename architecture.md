@@ -5,6 +5,11 @@ The **SMM Automation** is a two-pipeline system built on **n8n**, **Supabase (Po
 - **Posting Pipeline**: ideas and posts live in a content calendar, an LLM tailors each post per platform, schedulers publish, and notifications confirm the result.
 - **Messaging Pipeline**: comments, DMs, and follows trigger context-aware responses generated from company data, delivered through the platform messengers, with escalation to a human when needed.
 
+
+> [!IMPORTANT]
+> ### ⚠️ Recommended Production Path: External Schedulers & Messaging Aggregators
+> Direct integration with native social platform APIs (Meta Graph API, X API v2, LinkedIn UGC API) is fully documented and provided in these workflows. However, **due to strict and unpredictable app review processes, tight permission gating (e.g. Meta `instagram_manage_messages`, `pages_manage_posts`), aggressive rate limiting, and the persistent risk of platform developer app bans, utilizing certified third-party aggregators (such as Ayrshare, Buffer, Publer, or Metricool for publishing, and ManyChat, Gorgias, or Zendesk for messaging) is the strongly recommended operational path for production deployments.**
+
 ---
 
 ## 1. Architectural Principles

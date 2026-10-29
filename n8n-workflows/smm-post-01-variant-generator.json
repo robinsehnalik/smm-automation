@@ -8,7 +8,7 @@
         "options": {}
       },
       "id": "6d6eb7b7-fd57-4e37-9956-da389ffc1786",
-      "name": "Webhook / Notion Trigger",
+      "name": "Webhook / Airtable Trigger",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
@@ -19,7 +19,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const item = $input.item.json;\nconst body = item.body || item;\n\nconst title = body.title || 'Untitled Post';\nconst keyMessage = body.key_message || body.topic || '';\nconst mediaUrls = Array.isArray(body.media_urls) ? body.media_urls : (body.media_url ? [body.media_url] : []);\nconst targetPlatforms = Array.isArray(body.target_platforms) && body.target_platforms.length > 0 \n  ? body.target_platforms \n  : ['linkedin', 'twitter', 'instagram'];\nconst scheduledFor = body.scheduled_for || null;\n\nif (!keyMessage) {\n  throw new Error(\"Missing 'key_message' in request payload.\");\n}\n\nreturn {\n  json: {\n    post_id: body.id || ('post_' + Date.now()),\n    title: title,\n    key_message: keyMessage,\n    media_urls: mediaUrls,\n    target_platforms: targetPlatforms,\n    scheduled_for: scheduledFor,\n    started_at: Date.now()\n  }\n};"
+        "jsCode": "const item = $input.item.json;\nconst fields = item.fields || item.body?.fields || item.body || item;\n\nconst recordId = item.id || item.body?.id || fields.id || ('rec_' + Date.now());\nconst title = fields.Title || fields.title || 'Untitled Post';\nconst keyMessage = fields.KeyMessage || fields.key_message || '';\nconst mediaUrls = Array.isArray(fields.MediaURLs) ? fields.MediaURLs : (fields.MediaURLs ? [fields.MediaURLs] : []);\nconst targetPlatforms = Array.isArray(fields.TargetPlatforms) && fields.TargetPlatforms.length > 0 \n  ? fields.TargetPlatforms \n  : ['linkedin', 'x', 'instagram'];\nconst publishAt = fields.PublishAt || fields.publish_at || null;\n\nif (!keyMessage) {\n  throw new Error(\"Missing required 'KeyMessage' in calendar record.\");\n}\n\nreturn {\n  json: {\n    record_id: recordId,\n    title: title,\n    key_message: keyMessage,\n    media_urls: mediaUrls,\n    target_platforms: targetPlatforms,\n    publish_at: publishAt,\n    attempt: 1\n  }\n};"
       },
       "id": "2788c0f3-c3cc-47a8-a297-319347859595",
       "name": "Extract & Validate Input",
@@ -51,7 +51,7 @@
         },
         "sendBody": true,
         "contentType": "json",
-        "body": "={\n  \"model\": \"gpt-4o\",\n  \"temperature\": 0.3,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a Senior Social Media Strategist and Copywriter.\\n\\nGOAL:\\nTransform a raw content topic and key message into platform-optimized copy for LinkedIn, X (Twitter), and Instagram.\\n\\nPLATFORM SPECIFICATIONS:\\n- linkedin: Professional, structured with whitespace and bullet points. 800-1500 characters. 3-5 relevant industry hashtags.\\n- twitter (X): Punchy, compelling hook. MUST be strictly under 260 characters. Max 2 hashtags.\\n- instagram: Engaging storytelling hook, aesthetic formatting, call-to-action to link in bio. 300-800 characters. 8-15 niche hashtags.\\n\\nBRAND TONE GUIDELINES:\\n- Informative, authoritative, modern, and direct.\\n- No corporate fluff, clickbait, or exaggerated claims.\\n\\nOUTPUT SCHEMA (strictly JSON):\\n{\\n  \\\"linkedin\\\": string,\\n  \\\"twitter\\\": string,\\n  \\\"instagram\\\": string\\n}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Title: \" + $json.title + \"\\nTopic & Message: \" + $json.key_message\n    }\n  ]\n}"
+        "body": "={\n  \"model\": \"{{ $env.LLM_MODEL_POSTS || 'gpt-4o' }}\",\n  \"temperature\": 0.3,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a Senior Social Media Strategist and Copywriter.\\n\\nGOAL:\\nTransform a raw content topic and key message into platform-optimized copy for LinkedIn, X, and Instagram in accordance with brand voice.\\n\\nPLATFORM SPECIFICATIONS:\\n- linkedin: Professional, structured with whitespace and clean formatting. 800-1500 characters. 3-5 relevant industry hashtags.\\n- x: Punchy, compelling hook. MUST be strictly under 260 characters. Max 2 hashtags.\\n- instagram: Engaging visual hook, aesthetic formatting, call-to-action to link in bio. 300-800 characters. 8-15 niche hashtags.\\n\\nBRAND TONE GUIDELINES:\\n- Informative, authoritative, modern, and direct.\\n- No corporate fluff, clickbait, or exaggerated claims.\\n\\nOUTPUT SCHEMA (strictly JSON):\\n{\\n  \\\"linkedin\\\": string,\\n  \\\"x\\\": string,\\n  \\\"instagram\\\": string\\n}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Title: \" + $json.title + \"\\nKey Message: \" + $json.key_message\n    }\n  ]\n}"
       },
       "id": "339cf6d4-a06f-4f6a-b889-a1f5f8848d79",
       "name": "LLM Platform Variant Generator",
@@ -65,7 +65,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const inputData = $('Extract & Validate Input').item.json;\nconst llmResponse = $input.item.json;\n\nlet variants = {};\ntry {\n  const content = llmResponse.choices[0].message.content;\n  variants = JSON.parse(content);\n} catch (e) {\n  throw new Error(\"Failed to parse LLM variants JSON: \" + e.message);\n}\n\nconst validationErrors = [];\n\n// 1. Validate X (Twitter) character limit\nif (variants.twitter) {\n  if (variants.twitter.length > 280) {\n    // Truncate cleanly at word boundary\n    variants.twitter = variants.twitter.substring(0, 275).replace(/\\s+\\S*$/, '') + '...';\n  }\n}\n\n// 2. Validate Instagram media requirement\nif (variants.instagram) {\n  if (!inputData.media_urls || inputData.media_urls.length === 0) {\n    validationErrors.push(\"Instagram requires at least one image or video URL. Text-only posting is unsupported.\");\n  }\n  // Validate hashtag limit\n  const hashtagCount = (variants.instagram.match(/#[a-zA-Z0-9_]+/g) || []).length;\n  if (hashtagCount > 30) {\n    validationErrors.push(\"Instagram post exceeds 30 hashtags (\" + hashtagCount + \" detected).\");\n  }\n}\n\n// 3. Validate LinkedIn length\nif (variants.linkedin && variants.linkedin.length > 3000) {\n  variants.linkedin = variants.linkedin.substring(0, 2990) + '...';\n}\n\nreturn {\n  json: {\n    ...inputData,\n    variants: variants,\n    is_valid: validationErrors.length === 0,\n    validation_errors: validationErrors,\n    status: validationErrors.length === 0 ? 'ready_for_approval' : 'validation_failed',\n    generated_at: new Date().toISOString()\n  }\n};"
+        "jsCode": "const inputData = $('Extract & Validate Input').item.json;\nconst llmResponse = $input.item.json;\n\nlet variants = {};\ntry {\n  const content = llmResponse.choices[0].message.content;\n  variants = JSON.parse(content);\n} catch (e) {\n  throw new Error(\"Failed to parse LLM variants JSON: \" + e.message);\n}\n\nconst validationErrors = [];\n\n// 1. Validate X length (strict 280 weighted characters rule)\nif (variants.x) {\n  // URLs consume fixed 23 chars; simple weighted approximation\n  const textWithoutUrls = variants.x.replace(/https?:\\/\\/\\S+/g, '');\n  const urlCount = (variants.x.match(/https?:\\/\\/\\S+/g) || []).length;\n  const weightedLen = textWithoutUrls.length + (urlCount * 23);\n  if (weightedLen > 280) {\n    validationErrors.push(\"X post exceeds 280 weighted characters (\" + weightedLen + \" computed).\");\n  }\n}\n\n// 2. Validate Instagram media requirement & hashtags\nif (variants.instagram) {\n  if (!inputData.media_urls || inputData.media_urls.length === 0) {\n    validationErrors.push(\"Instagram requires at least one image or video URL. Text-only posting is unsupported.\");\n  }\n  const hashtagCount = (variants.instagram.match(/#[a-zA-Z0-9_]+/g) || []).length;\n  if (hashtagCount > 30) {\n    validationErrors.push(\"Instagram post exceeds 30 hashtags (\" + hashtagCount + \" detected).\");\n  }\n  if (variants.instagram.length > 2200) {\n    validationErrors.push(\"Instagram caption exceeds 2200 characters limit.\");\n  }\n}\n\n// 3. Validate LinkedIn length\nif (variants.linkedin && variants.linkedin.length > 3000) {\n  validationErrors.push(\"LinkedIn post exceeds 3000 characters limit.\");\n}\n\nconst isValid = validationErrors.length === 0;\n\nreturn {\n  json: {\n    ...inputData,\n    variants: variants,\n    is_valid: isValid,\n    validation_notes: validationErrors.join('; '),\n    status: isValid ? 'ready_for_approval' : 'needs_edit'\n  }\n};"
       },
       "id": "44fd708e-84ac-40fb-93c3-abfa02bb724a",
       "name": "Strict Code Validation",
@@ -78,37 +78,29 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/social_posts",
-        "method": "POST",
+        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}/{{ $json.record_id }}",
+        "method": "PATCH",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "apikey",
-              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
-            },
-            {
               "name": "Authorization",
-              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+              "value": "Bearer {{ $env.AIRTABLE_TOKEN }}"
             },
             {
               "name": "Content-Type",
               "value": "application/json"
-            },
-            {
-              "name": "Prefer",
-              "value": "return=representation"
             }
           ]
         },
         "sendBody": true,
         "contentType": "json",
-        "body": "={\n  \"title\": $json.title,\n  \"key_message\": $json.key_message,\n  \"media_urls\": $json.media_urls,\n  \"target_platforms\": $json.target_platforms,\n  \"variants\": $json.variants,\n  \"scheduled_for\": $json.scheduled_for,\n  \"status\": $json.status,\n  \"error_message\": $json.validation_errors.length > 0 ? $json.validation_errors.join('; ') : null\n}"
+        "body": "={\n  \"fields\": {\n    \"VariantLinkedIn\": $json.variants.linkedin || \"\",\n    \"VariantX\": $json.variants.x || \"\",\n    \"VariantInstagram\": $json.variants.instagram || \"\",\n    \"Status\": $json.status,\n    \"ValidationNotes\": $json.validation_notes || \"\"\n  }\n}"
       },
       "id": "d60e8744-d39a-497c-9613-66a0fb0269ae",
-      "name": "Save Post Record to Supabase",
+      "name": "Update Content Calendar Record",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
@@ -118,7 +110,7 @@
     }
   ],
   "connections": {
-    "Webhook / Notion Trigger": {
+    "Webhook / Airtable Trigger": {
       "main": [
         [
           {
@@ -155,7 +147,7 @@
       "main": [
         [
           {
-            "node": "Save Post Record to Supabase",
+            "node": "Update Content Calendar Record",
             "type": "main",
             "index": 0
           }
@@ -167,7 +159,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "9b99428e-9777-4c28-a58f-8674004693c1",
+  "versionId": "b18288d0-57f6-4191-8636-6d6349c25f19",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"

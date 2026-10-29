@@ -1,44 +1,42 @@
 # Automation Architecture — Social Media Management (SMM) System
 
-**Document Version:** 2.0
-**Author:** Robin Sehnalík
+**Status:** Draft Architecture Specification  
 
 ---
 
 ## Executive Summary
 
-The **Social Media Management (SMM) System** provides reliable, multi-network social posting and safe customer community triage by leveraging established 3rd-party platforms (**Ayrshare** for outbound scheduling and **ManyChat** for inbound messaging) coordinated through **n8n** and **Supabase**.
+The **Social Media Management (SMM) System** provides multi-network social publishing and customer direct message triage by integrating 3rd-party platforms (**Ayrshare** for outbound scheduling and **ManyChat** for inbound messaging) coordinated through **n8n** and **Supabase**.
 
-### 1. Architectural Refactoring & Problem Statement
+### 1. Scope and Limitations
 
-Previous iterations suffered from significant over-engineering and critical logic gaps:
+* **Supported Publishing Networks (v1)**: LinkedIn, X (formerly Twitter), and Instagram.
+* **Supported Messaging Channels (v1)**: Instagram Direct Messages and Facebook Messenger **DMs only**.
+* **Excluded Messaging Channels**: All messaging networks other than Instagram and Facebook Messenger direct messages are strictly out of scope.
+* **Excluded Interactions**: Public-comment replies, X direct messages, LinkedIn direct messages, and platform mentions are out of scope. (Note: Comment-to-DM triggers configured natively inside ManyChat execute prior to this webhook pipeline and are managed outside this repository).
+* **Single Content Store**: All post drafting, variant editing, and human approvals occur inside the Content Calendar (Airtable by default; Notion acceptable). The database does not mirror post copy or scheduling queues.
 
-1. **Rebuilding the Scheduler on Top of a Scheduler**: The old design polled PostgreSQL every minute, applied row locks, and called publisher APIs at execution time (`SMM-P3`). Modern social schedulers (Ayrshare) natively accept a `scheduleDate` parameter. By pushing approved posts with a target schedule date at approval time, all database polling, row locks, worker queue congestion, and double-posting bugs are completely eliminated.
-2. **Duplicate Dashboard & Analytics Debt**: Building custom posting calendars, approval inboxes, and analytics sync workers (`SMM-P4`) reinvented features that Ayrshare, Airtable, and Notion already provide out of the box.
-3. **Unsafe Messaging Gaps**: The previous community responder lacked webhook signature authentication, relied on uncalibrated self-reported LLM confidence scores, suffered from infinite bot-to-bot loop risks, and critically lacked a **handoff state** (meaning the bot would talk over a human agent who had taken over the conversation).
-4. **Premature `pgvector` Complexity**: Managing chunking pipelines and vector databases for static social FAQs added latency and infrastructure costs when standard brand policies comfortably fit inside modern LLM context windows.
+### 2. Background & Decision Record
 
-### 2. The Refactored Solution
-
-The modernized system decouples social management into two dedicated, low-complexity phases:
-
-- **Phase 1: Outbound Social Publishing (2 Workflows)**:
-  - **Tool Selected**: **Ayrshare API** (`https://app.ayrshare.com/api/post`).
-  - Ingests topics from Airtable/Notion, generates platform-specific variants (LinkedIn, X, Instagram) via OpenAI `gpt-4o`, enforces strict code-level character and media validation, and on human approval, dispatches directly to Ayrshare with `scheduleDate`.
-- **Phase 2: Safe Community Messaging (1 Consolidated Workflow)**:
-  - **Tool Selected**: **ManyChat API** (`https://api.manychat.com`).
-  - Ingests verified webhooks (`X-Webhook-Secret`), checks human handoff state in ManyChat (muting the bot if an agent is active), enforces loop protection (max 5 replies/hour), uses in-context cached prompt policies, and gates auto-replies behind a **strict intent allowlist**. Sensitive topics (complaints, refunds, legal) immediately trigger live agent takeover in ManyChat.
+* **Background**: Prior iterations polled relational databases on 1-minute intervals, maintained duplicate posting calendars, and permitted the automated bot to generate freeform text that talked over active human support agents.
+* **Architecture Decision**: Outbound scheduling is pushed directly to Ayrshare at approval time with `scheduleDate`, while inbound messaging enforces a classification-only LLM step, strict intent allowlisting, and deterministic canned templates with bot muting.
+* **Changelog**:
+  * Removed internal database posting queues in favor of a single Content Calendar store.
+  * Replaced freeform LLM DM replies with a closed intent classification schema and pre-approved canned templates.
+  * Added atomic per-subscriber rate limiting and human-takeover muting.
+  * Added automated status reconciliation workflow (`SMM-POST-03`).
+  * Removed vector search complexity in favor of in-prompt policy guidelines.
 
 ---
 
 ## 1. Architectural Principles
 
-1. **Leverage the Scheduler, Don't Rebuild It**: Posts are pushed to Ayrshare at approval time with `scheduleDate`. Ayrshare handles platform retries, media transcode/CDN upload, token refreshes, and delivery timing.
-2. **Strict Intent Allowlisting Over Uncalibrated Scores**: An LLM's self-reported confidence score (e.g. 0.85) is uncalibrated. Auto-replying is restricted strictly to an allowlist of deterministic intents (`business_hours`, `shipping_policy`, `catalog_link`, `returns_policy`, `general_faq`). Any complaint, refund demand, or price negotiation escalates to human staff.
-3. **Guaranteed Human Handoff Muting**: If a conversation is claimed by a human operator in ManyChat (`live_chat_status: "open"`) or marked paused in the database, the bot immediately aborts execution.
-4. **Code-Level Platform Validation**: Character constraints (280 for X, 3000 for LinkedIn) and platform requirements (**Instagram strictly requires image/video media**) are validated in code before approval.
-5. **In-Context Prompt Grounding**: Brand FAQs, policies, and tone are held directly in the prompt context, eliminating premature pgvector complexity.
-6. **Defense-in-Depth & Loop Protection**: All inbound webhooks verify secret tokens. Inbound user messages are capped at 5 automated replies per session to prevent bot-to-bot infinite loops and API quota drain.
+1. **Leverage the Scheduler, Avoid Redundant Queues**: Posts are pushed to Ayrshare at approval time with a `scheduleDate` timestamp. Ayrshare manages network rate limits, media encoding, token management, and delivery timing.
+2. **Deterministic Canned Templates Over Freeform Generation**: Inbound community triage uses the language model strictly as a classifier. The model outputs structured intent tags and sensitivity flags; it never authors reply copy. User messages are answered strictly using verified canned templates.
+3. **Muting on Human Handoff**: If a conversation is paused or claimed by a human operator in ManyChat (`live_chat_status: "open"`), the bot mutes immediately to avoid interrupting human interactions.
+4. **Code-Level Platform Validation**: Character lengths (X weighted rules, LinkedIn 3,000 characters) and media rules (Instagram strictly requires image or video media) are validated deterministically in code before approval.
+5. **Defense-in-Depth & Loop Protection**: Inbound webhooks enforce static secret verification (`X-Webhook-Secret`). User messages are capped at 5 automated replies per subscriber per hour to prevent infinite bot loops.
+6. **Transparent Bot Disclosure & Compliance**: Every automated DM reply includes a standard automated disclosure footer in compliance with Meta Platform policies, including explicit instructions for requesting human escalation.
 
 ---
 
@@ -46,93 +44,102 @@ The modernized system decouples social management into two dedicated, low-comple
 
 ```mermaid
 flowchart TD
-    subgraph SchedUI["Operations & Planning (Airtable / Notion / Ayrshare)"]
+    subgraph Operations["Content Planning & Approval (Airtable / Notion)"]
         Calendar["Content Calendar & Idea Intake"]
-        Approval["One-Click Approval Status"]
-        SchedulerDash["Ayrshare Native Analytics & Calendar"]
+        Approval["Editorial Approval Trigger"]
     end
 
-    subgraph Phase1["Phase 1: Outbound Publishing (Ayrshare)"]
-        P1["SMM-POST-01: Variant Generator\n(OpenAI gpt-4o + Code Validation)"]
+    subgraph Publishing["Phase 1: Outbound Publishing (Ayrshare)"]
+        P1["SMM-POST-01: Variant Generator\n(OpenAI Copy Generation + Code Validation)"]
         P2["SMM-POST-02: Approval Dispatcher\n(Push to Ayrshare with scheduleDate)"]
+        P3["SMM-POST-03: Status Reconciler\n(Daily Overdue Publication Verification)"]
     end
 
-    subgraph Phase2["Phase 2: Inbound Community Messaging (ManyChat)"]
-        M1["SMM-MSG-01: Community Triage Pipeline\n(Auth, Handoff Check, Intent Allowlist)"]
+    subgraph Messaging["Phase 2: Inbound DM Triage (ManyChat)"]
+        M1["SMM-MSG-01: Community Triage Pipeline\n(Auth, Event Claim, Muting, Classifier)"]
         MError["SMM-ERR: Global Error Handler"]
     end
 
-    subgraph External["Production Services"]
+    subgraph External["External Platforms"]
         AyrshareAPI["Ayrshare REST API (/api/post)"]
         ManyChatAPI["ManyChat REST API (/fb/sending/sendContent)"]
-        AgentInbox["ManyChat Native Live Agent Inbox & Mobile Apps"]
-        Networks["LinkedIn, X (Twitter), Instagram, Facebook"]
+        AgentInbox["ManyChat Live Agent Inbox & Mobile Apps"]
+        Networks["LinkedIn, X, Instagram, Facebook"]
     end
 
-    subgraph Data["Supabase PostgreSQL (Telemetry & State)"]
-        PostsTable[("social_posts (Variants, Schedule, Status)")]
-        ConvTable[("social_conversations (Handoff State & Loop Counter)")]
-        MsgTable[("social_messages (Audit Log & Intent)")]
+    subgraph Database["Supabase PostgreSQL (Telemetry & State)"]
+        ConvState[("conversation_state\n(Subscriber Window & Rate Counter)")]
+        BotEvents[("bot_events\n(Idempotency Claim & Audit Telemetry)")]
     end
 
     %% Phase 1 Connections
-    Calendar -->|Row: ready_for_drafting| P1
-    P1 -->|Code Validation: Length & Media| PostsTable
-    PostsTable -->|Status: ready_for_approval| Approval
-    Approval -->|Status: approved| P2
+    Calendar -->|Row status: ready_for_drafting| P1
+    P1 -->|Generate & Validate Variants| Calendar
+    Approval -->|Status flipped to: approved| P2
     P2 -->|POST /api/post with scheduleDate| AyrshareAPI
-    P2 -->|Save scheduler_post_id| PostsTable
-    AyrshareAPI -->|Scheduled Publish| Networks
-    AyrshareAPI -.->|Native Analytics| SchedulerDash
+    P2 -->|Save AyrsharePostIds & Status: scheduled| Calendar
+    P3 -->|Daily Check Overdue Posts| Calendar
+    P3 -->|Verify Post Status| AyrshareAPI
+    AyrshareAPI -->|Publish at Target Time| Networks
 
     %% Phase 2 Connections
-    Networks -->|DMs & Comments| ManyChatAPI
-    ManyChatAPI -->|Signed Webhook Event| M1
-    M1 -->|Check Human Active & Rate Limit| ConvTable
-    M1 -->|Safe Allowlist Reply| ManyChatAPI
-    M1 -->|Sensitive / Escalate| AgentInbox
-    M1 -->|Update State & Audit| ConvTable
-    M1 -->|Log Message| MsgTable
+    Networks -->|Direct Messages| ManyChatAPI
+    ManyChatAPI -->|Webhook with X-Webhook-Secret| M1
+    M1 -->|1. Event Claim & Rate Counter| Database
+    M1 -->|2. Safe Intent Template Reply| ManyChatAPI
+    M1 -->|3. Escalate / Apply needs_human Tag| AgentInbox
+    M1 -->|4. Log Anonymized Event| BotEvents
 
-    %% Error Handling
-    P1 -.->|On Exception| MError
-    P2 -.->|On Exception| MError
-    M1 -.->|On Exception| MError
+    %% Error Traps
+    P1 -.->|On Failure| MError
+    P2 -.->|On Failure| MError
+    P3 -.->|On Failure| MError
+    M1 -.->|On Failure| MError
 ```
 
 ---
 
 ## 3. Core Data Flows & Sequence Diagrams
 
-### 3.1. Phase 1: Content Ingestion, Validation, and Scheduled Publishing
+### 3.1. Outbound Content Creation & Scheduled Publishing
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Creator as Content Creator
+    participant Cal as Content Calendar (Airtable)
     participant N8N_P1 as n8n SMM-POST-01 (Generator)
     participant LLM as OpenAI (gpt-4o)
-    participant DB as Supabase (social_posts)
     actor Approver as Marketing Lead
     participant N8N_P2 as n8n SMM-POST-02 (Dispatcher)
     participant Ayrshare as Ayrshare API
-    participant Networks as Social Networks
+    participant Networks as Social Networks (LinkedIn, X, Instagram)
 
-    Creator->>N8N_P1: Submits idea, key message, media URLs, schedule date
-    N8N_P1->>LLM: Generate platform variants (LinkedIn, X, Instagram)
-    LLM-->>N8N_P1: Returns JSON copy variants
-    N8N_P1->>N8N_P1: Validate: X <= 280 chars, IG has media, hashtags <= 30
-    N8N_P1->>DB: INSERT into social_posts (status: 'ready_for_approval')
-    Approver->>DB: Reviews variants in Airtable/Supabase, sets status = 'approved'
-    DB->>N8N_P2: Trigger: Post Approved
-    N8N_P2->>Ayrshare: POST /api/post { post, platforms, scheduleDate, mediaUrls }
-    Ayrshare-->>N8N_P2: Return { id: "ayr_9988", status: "scheduled" }
-    N8N_P2->>DB: UPDATE social_posts (scheduler_post_id: "ayr_9988", status: 'scheduled')
-    Note over Ayrshare,Networks: Zero Polling: Ayrshare publishes automatically at scheduleDate
-    Ayrshare->>Networks: Delivers posts to LinkedIn, X, and Instagram
+    Creator->>Cal: Creates record with Title, KeyMessage, MediaURLs (Status: ready_for_drafting)
+    Cal->>N8N_P1: Webhook trigger (ready_for_drafting)
+    N8N_P1->>LLM: Generate platform variants using brand voice
+    LLM->>N8N_P1: Return JSON { linkedin, x, instagram }
+    N8N_P1->>N8N_P1: Code Validation: X <= 280 weighted chars, IG has media, hashtags <= 30
+    alt Validation Passed
+        N8N_P1->>Cal: Update record (Status: ready_for_approval, Variants populated)
+    else Validation Failed
+        N8N_P1->>Cal: Update record (Status: needs_edit, ValidationNotes populated)
+    end
+    Approver->>Cal: Reviews variants, sets Status = approved with PublishAt
+    Cal->>N8N_P2: Webhook trigger (approved)
+    N8N_P2->>Cal: Re-read record; claim Status = scheduling
+    N8N_P2->>Ayrshare: POST /api/post (platforms, scheduleDate, per-platform text)
+    alt Schedule Success
+        Ayrshare->>N8N_P2: Return post ID (id: "ayr_12345")
+        N8N_P2->>Cal: Update record (Status: scheduled, AyrsharePostIds: "ayr_12345")
+        Ayrshare->>Networks: Delivers post at scheduled timestamp
+    else Schedule Error
+        Ayrshare->>N8N_P2: API error response
+        N8N_P2->>Cal: Update record (Status: failed, Error: error_message)
+    end
 ```
 
-### 3.2. Phase 2: Inbound Community Message Triage & Handoff Muting
+### 3.2. Inbound Community Triage Pipeline
 
 ```mermaid
 sequenceDiagram
@@ -140,132 +147,204 @@ sequenceDiagram
     actor User as Instagram / Facebook User
     participant ManyChat as ManyChat Platform
     participant N8N_M1 as n8n SMM-MSG-01 (Triage)
-    participant DB as Supabase (social_conversations)
-    participant LLM as OpenAI (gpt-4o)
+    participant DB as Supabase (service_role)
+    participant LLM as OpenAI (gpt-4o-mini)
     actor Agent as Support Agent (ManyChat Inbox)
 
     User->>ManyChat: Sends DM: "What are your business hours?"
-    ManyChat->>N8N_M1: Webhook POST (headers: X-Webhook-Secret)
-    N8N_M1->>N8N_M1: Verify webhook secret (Reject if invalid)
-    N8N_M1->>DB: Query social_conversations (is_human_takeover, bot_reply_count)
-    DB-->>N8N_M1: { is_human_takeover: false, bot_reply_count: 1 }
-    N8N_M1->>LLM: Classify intent and evaluate against Allowlist
-    LLM-->>N8N_M1: JSON: { intent: "business_hours", is_safe_to_reply: true, reply_text: "..." }
-    N8N_M1->>ManyChat: POST /fb/sending/sendContent { subscriber_id, text }
-    ManyChat-->>User: Delivers reply in Instagram DM
-    N8N_M1->>DB: Upsert conversation (bot_reply_count: 2)
-
-    Note over User,Agent: Case 2: Sensitive Inquiry / Complaint
-    User->>ManyChat: "My package was damaged and I want a refund now!"
-    ManyChat->>N8N_M1: Webhook POST
-    N8N_M1->>LLM: Classify intent
-    LLM-->>N8N_M1: JSON: { intent: "complaint", is_safe_to_reply: false, escalation_reason: "Damage complaint" }
-    N8N_M1->>ManyChat: POST /subscriber/setCustomField { needs_human: true }
-    N8N_M1->>DB: UPDATE social_conversations (is_human_takeover: true)
-    Note over N8N_M1,ManyChat: Bot marks conversation claimed -> Bot is now SILENCED
-    ManyChat-->>Agent: Desktop / Mobile push notification: Live Agent Takeover
-    Agent->>ManyChat: Agent takes over and replies directly to user
+    ManyChat->>N8N_M1: Webhook POST (Header: X-Webhook-Secret)
+    N8N_M1->>N8N_M1: 1. Authenticate static secret (401 if invalid)
+    N8N_M1->>N8N_M1: 2. Check kill switch (BOT_ENABLED)
+    N8N_M1->>DB: 3. Claim event in bot_events (ON CONFLICT DO NOTHING)
+    N8N_M1->>DB: 4. Check muted status & bump_reply_counter(subscriber_id)
+    alt Conversation Muted or Rate Limited
+        N8N_M1->>DB: Log action = 'muted' or 'rate_limited'
+        N8N_M1->>N8N_M1: Abort processing silently
+    else Active & Within Limits
+        N8N_M1->>LLM: 5. Classify intent: <user_message>...</user_message>
+        LLM->>N8N_M1: Output JSON: { intents: ["business_hours"], sensitive: false }
+        alt Safe Intent & Allowlisted
+            alt Shadow Mode Active
+                N8N_M1->>ManyChat: Apply tag: needs_human
+                N8N_M1->>DB: Log action = 'shadow'
+            else Production Mode
+                N8N_M1->>ManyChat: POST /fb/sending/sendContent (Canned Template + Footer)
+                ManyChat->>User: Delivers pre-approved reply in DM
+                N8N_M1->>DB: Log action = 'replied'
+            end
+        else Sensitive Intent or Unlisted ('other')
+            N8N_M1->>ManyChat: POST /fb/sending/sendContent (handoff_ack template)
+            ManyChat->>User: "Thank you... a team member will follow up personally."
+            N8N_M1->>ManyChat: POST /fb/subscriber/addTagByName (Tag: needs_human)
+            N8N_M1->>DB: Update conversation_state (paused_until = now + 24h)
+            N8N_M1->>DB: Log action = 'escalated'
+            ManyChat->>Agent: Notifies on-call agent in ManyChat inbox
+        end
+    end
 ```
 
 ---
 
-## 4. Workflow Specifications
+## 4. Content Calendar & State Specifications
 
-### 4.1. Phase 1 Workflows (Outbound Publishing)
+### 4.1. Content Calendar Fields (Single Content Store)
 
-| File                                                                                           | Name                            | Trigger                    | Action & Validation                                                                                                                                      |
-| :--------------------------------------------------------------------------------------------- | :------------------------------ | :------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`smm-post-01-variant-generator.json`](./n8n-workflows/smm-post-01-variant-generator.json)     | SMM-POST-01 Variant Generator   | Webhook / Airtable trigger | Generates LinkedIn, X, and IG variants via `gpt-4o`. **Code Validation**: X <= 280 chars, IG requires media and <= 30 hashtags, LinkedIn <= 3000 chars.  |
-| [`smm-post-02-approval-dispatcher.json`](./n8n-workflows/smm-post-02-approval-dispatcher.json) | SMM-POST-02 Approval Dispatcher | Approval status change     | Formats multi-platform overrides and dispatches directly to Ayrshare API (`POST /api/post`) with `scheduleDate`. Eliminates all polling and row-locking. |
+The Content Calendar in Airtable (or Notion) maintains all post copy, assets, and scheduling states:
 
-### 4.2. Phase 2 Workflows (Community Messaging & Support)
+| Field Name | Type | Description |
+| :--- | :--- | :--- |
+| `Title` | Single line text | Working internal title of the content item. |
+| `KeyMessage` | Long text | Core talking points, summary, or source brief for copy generation. |
+| `MediaURLs` | Multiple attachment / URL | Image or video assets required for visual platforms (mandatory for Instagram). |
+| `TargetPlatforms` | Multiple select | Platforms selected for publication (`linkedin`, `x`, `instagram`). |
+| `PublishAt` | Date & Time (UTC) | Planned publication date and time. Must be at least 10 minutes in the future when approving. |
+| `Status` | Single select | Post lifecycle status (see transition state table below). |
+| `VariantLinkedIn` | Long text | Platform-tailored copy generated for LinkedIn. |
+| `VariantX` | Long text | Platform-tailored copy generated for X (under 280 weighted characters). |
+| `VariantInstagram` | Long text | Platform-tailored copy generated for Instagram (with hashtags). |
+| `ValidationNotes` | Long text | Validation errors or feedback recorded if code validation fails. |
+| `AyrsharePostIds` | Single line text | Remote post identifiers returned by Ayrshare API upon successful scheduling. |
+| `Error` | Long text | Diagnostic error message recorded if vendor scheduling fails. |
 
-| File                                                                                 | Name                                 | Trigger          | Action & Validation                                                                                                                                                                                                      |
-| :----------------------------------------------------------------------------------- | :----------------------------------- | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`smm-msg-01-triage-pipeline.json`](./n8n-workflows/smm-msg-01-triage-pipeline.json) | SMM-MSG-01 Community Triage Pipeline | ManyChat Webhook | Verifies `X-Webhook-Secret`. Checks if human agent active or max replies reached (5/hr). Triage via cached prompt FAQ against strict **Intent Allowlist**. Sends safe reply or triggers live agent takeover in ManyChat. |
-| [`smm-err-error-handler.json`](./n8n-workflows/smm-err-error-handler.json)           | SMM-ERR Global Error Handler         | Error Trigger    | Catches uncaught runtime exceptions across pipelines and alerts team via Resend email.                                                                                                                                   |
+### 4.2. Post Lifecycle Status Transitions
 
----
-
-## 5. Database Architecture & Schema (Supabase)
-
-The database is streamlined from 5 redundant tables down to **3 clean tables**:
-
-```sql
--- 1. Social Posts Table (Unified Ideas & Platform Variants)
-CREATE TABLE IF NOT EXISTS social_posts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  title TEXT NOT NULL,
-  key_message TEXT NOT NULL,
-  media_urls JSONB DEFAULT '[]'::jsonb,
-  target_platforms JSONB NOT NULL DEFAULT '["linkedin", "twitter", "instagram"]'::jsonb,
-  variants JSONB DEFAULT '{}'::jsonb, -- { "linkedin": "...", "twitter": "...", "instagram": "..." }
-  status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'ready_for_approval', 'approved', 'scheduled', 'published', 'failed')),
-  scheduled_for TIMESTAMPTZ,
-  scheduler_post_id TEXT, -- ID returned by Ayrshare API
-  error_message TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 2. Social Conversations & Handoff State (ManyChat / Instagram / WhatsApp)
-CREATE TABLE IF NOT EXISTS social_conversations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  subscriber_id TEXT UNIQUE NOT NULL, -- ManyChat subscriber ID
-  platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'whatsapp', 'telegram')),
-  is_human_takeover BOOLEAN DEFAULT false,
-  paused_until TIMESTAMPTZ,
-  bot_reply_count INTEGER DEFAULT 0,
-  last_interaction_at TIMESTAMPTZ DEFAULT now(),
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 3. Social Messages (Telemetry & Audit)
-CREATE TABLE IF NOT EXISTS social_messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  conversation_id UUID REFERENCES social_conversations(id) ON DELETE CASCADE,
-  external_message_id TEXT UNIQUE NOT NULL,
-  sender_type TEXT NOT NULL CHECK (sender_type IN ('subscriber', 'bot', 'agent')),
-  intent TEXT,
-  content TEXT NOT NULL,
-  status TEXT DEFAULT 'delivered' CHECK (status IN ('delivered', 'escalated', 'quarantined', 'failed')),
-  token_usage JSONB DEFAULT '{}'::jsonb,
-  latency_ms INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Performance & Query Indexes
-CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status);
-CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled_for ON social_posts(scheduled_for);
-CREATE INDEX IF NOT EXISTS idx_social_conv_subscriber ON social_conversations(subscriber_id);
-CREATE INDEX IF NOT EXISTS idx_social_msg_conv ON social_messages(conversation_id);
+```
+[idea] ──► [ready_for_drafting] ──► (SMM-POST-01) ──► [ready_for_approval]
+                                             │               │
+                                             │ (fails checks)│ (human approves)
+                                             ▼               ▼
+                                       [needs_edit]      [approved]
+                                                             │
+                                                             ▼ (SMM-POST-02 claims)
+                                                        [scheduling]
+                                                             │
+                                             ┌───────────────┴───────────────┐
+                                             ▼ (Ayrshare success)            ▼ (Ayrshare error)
+                                        [scheduled]                       [failed]
+                                             │
+                                             ▼ (SMM-POST-03 reconciles)
+                                        [published]
 ```
 
+| From Status | Transition Trigger | To Status | Performed By |
+| :--- | :--- | :--- | :--- |
+| `idea` | Creator adds key message and requests variants | `ready_for_drafting` | Content Creator |
+| `ready_for_drafting` | Code validation passes on generated copy | `ready_for_approval` | `SMM-POST-01` |
+| `ready_for_drafting` | Validation fails after retry attempt | `needs_edit` | `SMM-POST-01` |
+| `needs_edit` | Creator updates brief or manually tweaks copy | `ready_for_drafting` | Content Creator |
+| `ready_for_approval` | Editorial lead reviews and approves post | `approved` | Marketing Lead |
+| `approved` | Dispatcher claims record before vendor API call | `scheduling` | `SMM-POST-02` |
+| `scheduling` | Ayrshare accepts post payload | `scheduled` | `SMM-POST-02` |
+| `scheduling` | Ayrshare rejects post or lead time insufficient | `failed` | `SMM-POST-02` |
+| `scheduled` | Post confirmed published after scheduled time | `published` | `SMM-POST-03` |
+| `scheduled` | Post rejected or failed delivery at scheduled time | `failed` | `SMM-POST-03` |
+
+### 4.3. ManyChat Tagging & Operator Visibility
+
+| Tag Name | Application Trigger | Operational Meaning |
+| :--- | :--- | :--- |
+| `needs_human` | Sensitive inquiry detected, unlisted intent, rate limit hit, shadow mode run, or kill switch engaged. | Signals that the conversation requires human attention in the ManyChat inbox. |
+
 ---
 
-## 6. Security & Safety Guardrails
+## 5. Workflow Catalog (n8n)
 
-1. **Webhook Signature & Secret Verification**:
-   The `/smm/manychat-webhook` endpoint strictly authenticates the `X-Webhook-Secret` header before any payload processing. Unauthenticated calls are rejected with 401 Unauthorized.
-2. **Deterministic Intent Allowlist**:
-   Auto-replies are restricted to safe, factual inquiries (`business_hours`, `shipping_policy`, `catalog_link`, `returns_policy`, `general_faq`). Sensitive topics (complaints, damage reports, pricing negotiation, legal threats) automatically escalate to human operators.
-3. **Guaranteed Bot Muting on Human Handoff**:
-   The workflow checks both ManyChat's live chat status and Supabase's `is_human_takeover` flag. Once an agent claims a conversation, the bot is immediately silenced to prevent talking over human team members.
-4. **Loop Protection & Spend Cap**:
-   Automated replies are strictly throttled to a maximum of 5 replies per user session to eliminate bot-to-bot recursion and prevent LLM API cost drain.
-5. **Code-Level Pre-Flight Validation**:
-   Character limits (X <= 280) and media rules (Instagram requires image/video) are validated in JavaScript code rather than trusting the LLM to follow instructions.
+| ID | Workflow | Trigger | Primary Purpose | Writes To |
+| :--- | :--- | :--- | :--- | :--- |
+| **SMM-POST-01** | Variant Generator | Webhook / Airtable trigger (`ready_for_drafting`) | Generates copy variants for LinkedIn, X, and Instagram via `gpt-4o`. Validates length and media rules in code. | Content Calendar (`ready_for_approval` or `needs_edit`) |
+| **SMM-POST-02** | Approval Dispatcher | Webhook / Airtable trigger (`approved`) | Enforces lead time, claims `scheduling` status, and pushes post to Ayrshare API with `scheduleDate`. | Content Calendar (`scheduled` or `failed`) |
+| **SMM-POST-03** | Status Reconciler | Daily Schedule (`0 4 * * *`) | Queries Ayrshare history for overdue scheduled posts and updates status to `published` or `failed`. | Content Calendar (`published` or `failed`) |
+| **SMM-MSG-01** | Community Triage Pipeline | ManyChat Webhook (`POST /smm/manychat-webhook`) | Verifies static secret, checks mute/rate limit, classifies intent, and sends canned templates or triggers handoff. | ManyChat API, `conversation_state`, `bot_events` |
+| **SMM-ERR** | Global Error Handler | Error Trigger | Catches unhandled workflow errors and emails administrators via Resend. | Admin notification email |
 
 ---
 
-## 7. Comparative Metrics: Legacy vs. Streamlined
+## 6. Database Architecture & Privacy (Supabase)
 
-| Dimension                  | Legacy Over-Engineered Architecture        | Streamlined Architecture                            |
-| :------------------------- | :----------------------------------------- | :-------------------------------------------------- |
-| **Workflow Count**         | 9 chained workflows + webhook hops         | **3 decoupled workflows** + 1 error handler         |
-| **Scheduler Architecture** | Custom 1-minute polling + DB row locks     | **Direct Ayrshare API push with `scheduleDate`**    |
-| **Double-Post Risk**       | High (race conditions on polling worker)   | **Eliminated** (Idempotent vendor scheduling)       |
-| **Dashboards & Inboxes**   | Custom calendar, inbox, and metrics tables | **Native Ayrshare Calendar + ManyChat Inbox**       |
-| **Handoff Protection**     | None (Bot talked over live human agents)   | **Strict bot-muting state check**                   |
-| **Safety Gating**          | Uncalibrated LLM confidence score (0.85)   | **Deterministic Intent Allowlist**                  |
-| **Database Footprint**     | 5 tables + pgvector + missing foreign keys | **3 normalized tables with foreign keys & indexes** |
+The database holds no post copy and no inbound message text. It functions strictly as an operational state and anonymized telemetry store:
+
+```mermaid
+erDiagram
+    conversation_state {
+        TEXT subscriber_id PK
+        TEXT platform
+        TIMESTAMPTZ paused_until
+        TIMESTAMPTZ window_start
+        INTEGER reply_count
+        TIMESTAMPTZ last_interaction_at
+    }
+
+    bot_events {
+        UUID id PK
+        TEXT event_key UK
+        TEXT subscriber_hash
+        TEXT platform
+        TEXT_ARRAY intents
+        BOOLEAN sensitive
+        TEXT action
+        TEXT_ARRAY template_ids
+        INTEGER prompt_tokens
+        INTEGER completion_tokens
+        INTEGER latency_ms
+        TIMESTAMPTZ created_at
+    }
+```
+
+### Data-Flow & Privacy Table
+
+| Data Store / Service | Data Stored | PII Present | Retention Period | Access Controls |
+| :--- | :--- | :--- | :--- | :--- |
+| **Content Calendar (Airtable)** | Post ideas, key messages, copy variants, media links, scheduling IDs | None (marketing copy only) | Indefinite (content library) | Airtable role permissions; scoped API token |
+| **Supabase `conversation_state`** | Subscriber platform ID, rate counter, pause expiration timestamp | Pseudonymous platform ID | **30 days idle** (purged via `purge_expired_data()`) | `service_role` only; RLS enabled |
+| **Supabase `bot_events`** | Event key, salted subscriber hash, classified intents, action, token metrics | None (One-way hashed subscriber ID; **no message content**) | **30 days** (purged via `purge_expired_data()`) | `service_role` only; RLS enabled |
+| **Ayrshare API** | Social copy variants, media URLs, target accounts, post IDs | None | Per Ayrshare account retention | Bearer API Key |
+| **ManyChat Platform** | Subscriber name, profile data, full message history, assigned tags | Yes (Full customer DM history in native inbox) | Per ManyChat account data policies | ManyChat Workspace RBAC & API Token |
+| **OpenAI API** | Inbound message text for classification (transient) | Transient in request | Transient (Zero Data Retention agreement recommended) | TLS encryption; Bearer API Key |
+
+---
+
+## 7. Open Decisions / To Verify
+
+The following items are deferred for validation against operational tooling:
+
+1. **Content Calendar Selection (Airtable vs. Notion)**:
+   * **Recommendation**: Airtable is recommended due to native webhook automations on status change and granular field-level permission tokens.
+   * **Trigger Mechanism**: Verify whether the calendar triggers n8n via instant webhook automation or periodic polling.
+2. **ManyChat Platform Capabilities**:
+   * **Live Chat Status Exposure**: Verify whether the ManyChat webhook payload or REST API reliably exposes the current live-chat conversation state (`live_chat_status === 'open'`).
+   * **API Endpoint Paths**: Verify whether custom fields and tags use `/fb/subscriber/addTagByName` and `/fb/subscriber/setCustomField` across all connected platforms.
+   * **Event Identifier**: Verify whether ManyChat webhook events provide a persistent unique message ID in the payload to use directly as `event_key`.
+   * **Agent Notification Workflow**: Setting the `needs_human` tag requires a ManyChat internal automation rule to notify human agents (e.g. mobile push notification). This must be configured manually inside ManyChat.
+   * **Early Unmuting**: Verify how operators can manually clear `paused_until` early if an agent resolves an inquiry ahead of schedule.
+3. **Ayrshare API Capabilities**:
+   * **Per-Platform Copy in Single Call**: Verify whether Ayrshare's `/api/post` endpoint accepts individual platform copy overrides (`twitter`, `instagram`, `linkedin`) in a single unified API request.
+   * **Idempotency Keys**: Verify whether Ayrshare supports an idempotency key header or unique reference ID to prevent duplicate scheduling on network retries.
+   * **Publication Status Webhook**: Verify whether Ayrshare provides an outbound webhook upon post publication to replace the daily reconciler (`SMM-POST-03`).
+   * **Account Tier Limitations**: Confirm whether the target Ayrshare subscription tier permits direct API posting to X.
+4. **Environment & Runtime Infrastructure**:
+   * **X Character Weighting**: Verify whether custom n8n runner environments support importing the `twitter-text` library for exact CJK and URL weighting.
+   * **`pg_cron` Availability**: Verify whether the Supabase instance includes `pg_cron` for scheduling `purge_expired_data()`.
+   * **Independent Secondary Alerting**: Determine whether critical failures should dispatch to a secondary alerting channel (e.g. Slack webhook) if Resend encounters downtime.
+
+---
+
+## 8. Repository Layout & File Map
+
+```text
+smm-automation/
+├── architecture.md                     # Draft System Architecture Specification (this document)
+├── README.md                           # Deployment Guide, Setup Walkthrough, and Test Plan
+├── .env.example                        # Template for all environment variables and secrets
+├── prompts/
+│   ├── brand-voice.md                  # Tone, hashtag constraints, and per-platform formatting rules
+│   └── reply-templates.md              # Closed intent templates, handoff acknowledgment, and footer
+├── n8n-workflows/
+│   ├── smm-post-01-variant-generator.json     # Generates platform variants from calendar ideas
+│   ├── smm-post-02-approval-dispatcher.json   # Validates lead time and schedules post via Ayrshare
+│   ├── smm-post-03-status-reconciler.json     # Daily reconciler verifying publication of overdue posts
+│   ├── smm-msg-01-triage-pipeline.json        # Authenticated DM triage, rate limiting, and intent routing
+│   ├── smm-err-error-handler.json             # Global error handler and administrator notifier
+│   └── CHANGES-REQUIRED.md                    # Node-level design for regeneration loops & event claiming
+└── sql/
+    └── schema.sql                             # Hardened schema with deny-by-default RLS and rate function
+```

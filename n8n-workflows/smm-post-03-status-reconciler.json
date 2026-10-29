@@ -1,0 +1,178 @@
+{
+  "name": "SMM-POST-03 Status Reconciler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 4 * * *"
+            }
+          ]
+        }
+      },
+      "id": "e4a2bc15-1823-4412-9c91-236b36077e5d",
+      "name": "Daily Schedule (04:00 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}?filterByFormula=AND(Status='scheduled', IS_BEFORE(PublishAt, DATEADD(NOW(), -15, 'minute')))",
+        "method": "GET",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.AIRTABLE_TOKEN }}"
+            }
+          ]
+        }
+      },
+      "id": "7ac1992e-ec5f-46bb-99ea-e2608404a1b9",
+      "name": "Fetch Overdue Scheduled Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const records = $input.item.json.records || [];\nif (!Array.isArray(records) || records.length === 0) {\n  return [];\n}\n\nreturn records.map(r => ({\n  json: {\n    record_id: r.id,\n    ayrshare_post_id: (r.fields?.AyrsharePostIds || '').trim(),\n    title: r.fields?.Title || 'Untitled',\n    publish_at: r.fields?.PublishAt\n  }\n}));"
+      },
+      "id": "c59604eb-cfc3-42e5-a2f0-ba5d92e5a7b6",
+      "name": "Format Overdue Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://app.ayrshare.com/api/history/byPostId?id={{ $json.ayrshare_post_id }}",
+        "method": "GET",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.AYRSHARE_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "18cf6721-a54b-4b10-a7d5-d92e861d8f99",
+      "name": "Check Ayrshare Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}/{{ $('Format Overdue Posts').item.json.record_id }}",
+        "method": "PATCH",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.AIRTABLE_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"fields\": {\n    \"Status\": $json.status === 'success' || $json.published ? \"published\" : \"failed\",\n    \"Error\": $json.status === 'success' || $json.published ? \"\" : ($json.error || \"Failed reconciliation or post not confirmed published\")\n  }\n}"
+      },
+      "id": "a190538a-df01-4ec4-9dfa-c10a3e0f9b31",
+      "name": "Update Calendar: Reconciled Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1160,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Schedule (04:00 AM)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Overdue Scheduled Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overdue Scheduled Posts": {
+      "main": [
+        [
+          {
+            "node": "Format Overdue Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Overdue Posts": {
+      "main": [
+        [
+          {
+            "node": "Check Ayrshare Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ayrshare Status": {
+      "main": [
+        [
+          {
+            "node": "Update Calendar: Reconciled Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "df1a8b94-813c-412f-b441-28569c765ef3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "automation-suite"
+  },
+  "id": "c13840ff",
+  "tags": []
+}

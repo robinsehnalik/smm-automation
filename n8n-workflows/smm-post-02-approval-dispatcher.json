@@ -8,7 +8,7 @@
         "options": {}
       },
       "id": "f1d7b4ca-bafa-4e9f-851a-12f0b81c8ad8",
-      "name": "Webhook / Approval Event Trigger",
+      "name": "Webhook / Approval Trigger",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
@@ -19,14 +19,46 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const item = $input.item.json;\nconst body = item.body || item;\n\nconst postId = body.id || body.post_id;\nconst variants = body.variants || {};\nconst mediaUrls = body.media_urls || [];\nconst targetPlatforms = body.target_platforms || ['linkedin', 'twitter', 'instagram'];\nconst scheduledFor = body.scheduled_for;\n\nif (!postId) {\n  throw new Error(\"Missing post 'id' in approval event.\");\n}\n\n// Ayrshare multi-platform post format\nconst ayrsharePayload = {\n  post: variants.linkedin || variants.twitter || variants.instagram || '',\n  platforms: targetPlatforms,\n  mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,\n  postType: mediaUrls.length > 0 ? 'image' : 'text'\n};\n\n// Use platform-specific text overrides in Ayrshare\nif (variants.twitter || variants.instagram || variants.linkedin) {\n  ayrsharePayload.platforms = targetPlatforms;\n  // If specific overrides provided:\n  if (variants.twitter) ayrsharePayload.twitter = variants.twitter;\n  if (variants.instagram) ayrsharePayload.instagram = variants.instagram;\n  if (variants.linkedin) ayrsharePayload.linkedin = variants.linkedin;\n}\n\n// Add scheduleDate if set\nif (scheduledFor) {\n  ayrsharePayload.scheduleDate = new Date(scheduledFor).toISOString();\n}\n\nreturn {\n  json: {\n    post_id: postId,\n    ayrshare_payload: ayrsharePayload,\n    scheduled_for: scheduledFor || 'immediate'\n  }\n};"
+        "jsCode": "const item = $input.item.json;\nconst fields = item.fields || item.body?.fields || item.body || item;\n\nconst recordId = item.id || item.body?.id || fields.id;\nconst status = fields.Status || fields.status;\nconst ayrsharePostIds = fields.AyrsharePostIds || fields.ayrshare_post_ids || '';\nconst publishAt = fields.PublishAt || fields.publish_at;\nconst variantLinkedIn = fields.VariantLinkedIn || fields.variant_linkedin || '';\nconst variantX = fields.VariantX || fields.variant_x || '';\nconst variantInstagram = fields.VariantInstagram || fields.variant_instagram || '';\nconst mediaUrls = Array.isArray(fields.MediaURLs) ? fields.MediaURLs : (fields.MediaURLs ? [fields.MediaURLs] : []);\nconst targetPlatforms = Array.isArray(fields.TargetPlatforms) && fields.TargetPlatforms.length > 0\n  ? fields.TargetPlatforms\n  : ['linkedin', 'x', 'instagram'];\n\nif (!recordId) {\n  throw new Error(\"Missing record ID in approval trigger event.\");\n}\n\n// 1. Guard check: Must be approved and have no existing Ayrshare post ID\nif (status !== 'approved') {\n  return {\n    json: {\n      skip: true,\n      reason: \"Record status is not 'approved' (current: \" + status + \")\"\n    }\n  };\n}\nif (ayrsharePostIds && ayrsharePostIds.trim().length > 0) {\n  return {\n    json: {\n      skip: true,\n      reason: \"Record already has AyrsharePostIds assigned: \" + ayrsharePostIds\n    }\n  };\n}\n\n// 2. Validate lead time (PublishAt at least MIN_SCHEDULE_LEAD_MINUTES in future)\nconst minLeadMinutes = parseInt($env.MIN_SCHEDULE_LEAD_MINUTES || '10', 10);\nconst now = new Date();\nif (!publishAt) {\n  return {\n    json: {\n      record_id: recordId,\n      has_error: true,\n      error_message: \"Missing PublishAt timestamp for scheduled post.\"\n    }\n  };\n}\n\nconst publishDate = new Date(publishAt);\nconst diffMinutes = (publishDate.getTime() - now.getTime()) / (1000 * 60);\nif (diffMinutes < minLeadMinutes) {\n  return {\n    json: {\n      record_id: recordId,\n      has_error: true,\n      error_message: \"PublishAt must be at least \" + minLeadMinutes + \" minutes in the future (lead: \" + Math.round(diffMinutes) + \" min).\"\n    }\n  };\n}\n\n// Map platforms to Ayrshare format (Ayrshare uses 'twitter' for X)\nconst ayrPlatforms = targetPlatforms.map(p => (p === 'x' ? 'twitter' : p));\n\nconst ayrsharePayload = {\n  post: variantLinkedIn || variantX || variantInstagram,\n  platforms: ayrPlatforms,\n  scheduleDate: publishDate.toISOString(),\n  mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,\n  postType: mediaUrls.length > 0 ? 'image' : 'text'\n};\n\nif (variantX) ayrsharePayload.twitter = variantX;\nif (variantInstagram) ayrsharePayload.instagram = variantInstagram;\nif (variantLinkedIn) ayrsharePayload.linkedin = variantLinkedIn;\n\nreturn {\n  json: {\n    record_id: recordId,\n    has_error: false,\n    ayrshare_payload: ayrsharePayload,\n    publish_at: publishDate.toISOString()\n  }\n};"
       },
       "id": "8cb59804-5dc7-45f7-adb8-f61a93e0e846",
-      "name": "Format Ayrshare Payload",
+      "name": "Verify Eligibility & Format Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}/{{ $json.record_id }}",
+        "method": "PATCH",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.AIRTABLE_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"fields\": {\n    \"Status\": $json.has_error ? \"failed\" : \"scheduling\",\n    \"Error\": $json.has_error ? $json.error_message : \"\"\n  }\n}"
+      },
+      "id": "92f7d988-cb11-477c-a496-e17622998a41",
+      "name": "Claim Status: scheduling",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        680,
         300
       ]
     },
@@ -51,20 +83,20 @@
         },
         "sendBody": true,
         "contentType": "json",
-        "body": "={{ $json.ayrshare_payload }}"
+        "body": "={{ $('Verify Eligibility & Format Payload').item.json.ayrshare_payload }}"
       },
       "id": "3efa108b-8916-4779-8667-af1907373dcc",
-      "name": "Call Ayrshare API",
+      "name": "Dispatch to Ayrshare API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        680,
+        920,
         300
       ]
     },
     {
       "parameters": {
-        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/social_posts?id=eq.{{ $('Format Ayrshare Payload').item.json.post_id }}",
+        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}/{{ $('Verify Eligibility & Format Payload').item.json.record_id }}",
         "method": "PATCH",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
@@ -72,12 +104,8 @@
         "headerParameters": {
           "parameters": [
             {
-              "name": "apikey",
-              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
-            },
-            {
               "name": "Authorization",
-              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+              "value": "Bearer {{ $env.AIRTABLE_TOKEN }}"
             },
             {
               "name": "Content-Type",
@@ -87,46 +115,57 @@
         },
         "sendBody": true,
         "contentType": "json",
-        "body": "={\n  \"scheduler_post_id\": $json.id || $json.refId || 'ayr_' + Date.now(),\n  \"status\": $json.status === 'scheduled' || $('Format Ayrshare Payload').item.json.scheduled_for !== 'immediate' ? 'scheduled' : 'published',\n  \"updated_at\": new Date().toISOString()\n}"
+        "body": "={\n  \"fields\": {\n    \"AyrsharePostIds\": $json.id || $json.refId || 'ayr_' + Date.now(),\n    \"Status\": \"scheduled\",\n    \"Error\": \"\"\n  }\n}"
       },
       "id": "fded1cc2-1853-4533-98f7-9bef99256898",
-      "name": "Update Supabase Post Status",
+      "name": "Update Calendar: scheduled",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        920,
+        1160,
         300
       ]
     }
   ],
   "connections": {
-    "Webhook / Approval Event Trigger": {
+    "Webhook / Approval Trigger": {
       "main": [
         [
           {
-            "node": "Format Ayrshare Payload",
+            "node": "Verify Eligibility & Format Payload",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Format Ayrshare Payload": {
+    "Verify Eligibility & Format Payload": {
       "main": [
         [
           {
-            "node": "Call Ayrshare API",
+            "node": "Claim Status: scheduling",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Call Ayrshare API": {
+    "Claim Status: scheduling": {
       "main": [
         [
           {
-            "node": "Update Supabase Post Status",
+            "node": "Dispatch to Ayrshare API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch to Ayrshare API": {
+      "main": [
+        [
+          {
+            "node": "Update Calendar: scheduled",
             "type": "main",
             "index": 0
           }
@@ -138,7 +177,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "9004fee5-5cd9-4e2d-9ec8-da46424ba5e1",
+  "versionId": "b8a85e49-8d83-490b-93ae-c9ee6e06b74e",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"

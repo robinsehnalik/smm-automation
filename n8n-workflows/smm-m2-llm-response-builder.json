@@ -7,7 +7,7 @@
         "path": "smm/response-builder",
         "responseMode": "onReceived"
       },
-      "id": "ad7a878d-82ab-4718-9012-2de092c0a2bf",
+      "id": "c32a193b-30a9-4d60-881d-c61cf279854d",
       "name": "Response Builder Trigger",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -47,7 +47,7 @@
           ]
         }
       },
-      "id": "0cd1a2be-3680-4213-b682-ca91616d5b0a",
+      "id": "b153f74a-fbb0-4c66-b997-7cc85485aca0",
       "name": "Fetch Message & Brand Voice",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -75,9 +75,9 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  model: \"gpt-4o\",\n  response_format: { type: \"json_object\" },\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are a brand social assistant. Assess incoming message for sentiment, complaints, or custom pricing. Ground answers strictly in company facts. Return JSON: { \\\"reply\\\": string, \\\"confidence\\\": number, \\\"needs_human\\\": boolean, \\\"sentiment\\\": \\\"positive|neutral|negative|spam\\\" }\"\n    },\n    { role: \"user\", content: $json[0].body }\n  ]\n}) }}"
+        "jsonBody": "={{ JSON.stringify({\n  model: \"gpt-4o\",\n  response_format: { type: \"json_object\" },\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are a brand social assistant. Assess incoming message from the 3rd-party messaging platform for sentiment, complaints, or custom pricing. Ground answers strictly in company facts. Return JSON: { \\\"reply\\\": string, \\\"confidence\\\": number, \\\"needs_human\\\": boolean, \\\"sentiment\\\": \\\"positive|neutral|negative|spam\\\" }\"\n    },\n    { role: \"user\", content: $json[0].body }\n  ]\n}) }}"
       },
-      "id": "d236603d-9cc6-4745-a61c-704a9cddb250",
+      "id": "a4e88f6f-cfca-4333-9f5c-04409b8895df",
       "name": "LLM Response & Risk Assessment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -89,9 +89,9 @@
     {
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const res = JSON.parse($json.choices[0].message.content);\nconst msgId = $('Fetch Message & Brand Voice').first().json[0].id;\n\nconst canAutoReply = res.confidence >= 0.85 && !res.needs_human && res.sentiment !== 'negative';\n\nreturn [{\n  json: {\n    messageId: msgId,\n    reply: res.reply,\n    canAutoReply,\n    needsHuman: !canAutoReply,\n    confidence: res.confidence\n  }\n}];"
+        "jsCode": "const res = JSON.parse($json.choices[0].message.content);\nconst msgId = $('Fetch Message & Brand Voice').first().json[0].id;\nconst senderId = $('Response Builder Trigger').first().json.body.senderId || 'subscriber_anon';\n\nconst canAutoReply = res.confidence >= 0.85 && !res.needs_human && res.sentiment !== 'negative';\n\nreturn [{\n  json: {\n    messageId: msgId,\n    senderId: senderId,\n    reply: res.reply,\n    canAutoReply,\n    needsHuman: !canAutoReply,\n    confidence: res.confidence\n  }\n}];"
       },
-      "id": "604ea54e-fa4b-4567-9987-c8b7308f4e78",
+      "id": "ae47de8a-2c27-4c02-a795-1face4a76217",
       "name": "Evaluate Decision Policy",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -111,7 +111,7 @@
           ]
         }
       },
-      "id": "f697327f-05ea-4fcc-b36c-29b2f9c071e5",
+      "id": "907bdab8-bcd9-4ed4-8bb3-16b3058dc4d8",
       "name": "Can Auto Reply?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
@@ -137,7 +137,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}"
       },
-      "id": "21950cd9-f64c-42e7-b8da-a9321fba97a5",
+      "id": "aa55fc61-99dd-4c3b-bbfd-c2d42f3cb6a1",
       "name": "Trigger SMM-M3 Dispatch",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -163,7 +163,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}"
       },
-      "id": "98ff1133-a4bb-450e-aa98-e83f2676e4f9",
+      "id": "894b54c3-0370-4351-8392-b2f07102afc7",
       "name": "Trigger SMM-M4 Escalation",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -241,11 +241,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "c739b538-08c7-4ea7-afa7-8dbfc7675714",
+  "versionId": "df86705d-fb08-4702-89c6-3548e746628f",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "1f739b58",
+  "id": "c1342c7c",
   "tags": []
 }

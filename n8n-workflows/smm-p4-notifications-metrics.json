@@ -12,7 +12,7 @@
           ]
         }
       },
-      "id": "f67fbe6f-1a0d-4fa8-a365-3c2164aa5e8c",
+      "id": "1d2cb129-3607-4101-aa3a-edcc2194b13a",
       "name": "Daily Metrics Poll Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
@@ -52,7 +52,7 @@
           ]
         }
       },
-      "id": "7fa1f0ec-9464-44af-9ead-9f2d81a0bdef",
+      "id": "41521250-8cc1-4dd6-b0de-f6268ae4b5ea",
       "name": "Fetch Published Variants",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -86,7 +86,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  variant_id: $json[0]?.id || 'mock',\n  impressions: 250,\n  likes: 18,\n  comments: 3,\n  shares: 2\n}) }}"
       },
-      "id": "35f8e4af-3127-4b18-878f-11ced72d20f9",
+      "id": "a51f23d4-029f-4583-b52f-5dba001adfaf",
       "name": "Save Metrics Snapshot",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -124,11 +124,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "042f7b56-092a-4a9d-95c2-d5376f86d6c8",
+  "versionId": "5384d97c-0959-435e-8c8a-512b21e08538",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "8c17dfb5",
+  "id": "e060d8cd",
   "tags": []
 }

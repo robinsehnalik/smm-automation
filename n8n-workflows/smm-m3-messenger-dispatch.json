@@ -7,7 +7,7 @@
         "path": "smm/dispatch",
         "responseMode": "responseNode"
       },
-      "id": "6ee49f26-4273-46a8-b198-426794e8daa9",
+      "id": "c1ea6778-5674-487f-b923-f69c05a5c2b7",
       "name": "Dispatch Trigger",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -19,9 +19,9 @@
     {
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const body = $json.body || {};\nreturn [{\n  json: {\n    messageId: body.messageId,\n    reply: body.reply,\n    allowed: true\n  }\n}];"
+        "jsCode": "const body = $json.body || {};\nreturn [{\n  json: {\n    messageId: body.messageId,\n    senderId: body.senderId || 'subscriber_anon',\n    reply: body.reply,\n    allowed: true\n  }\n}];"
       },
-      "id": "f53cc33c-2e23-432f-8f07-5461bc4d6aec",
+      "id": "13124d74-6ede-4010-a75d-2528983c60bb",
       "name": "Verify Rate Limit Caps",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -33,13 +33,13 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://graph.facebook.com/v19.0/me/messages",
+        "url": "={{ $env.LINK_TO_YOUR_MESSENGER_API || 'https://api.manychat.com/fb/sending/sendContent' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Authorization",
-              "value": "Bearer {{ $env.META_PAGE_ACCESS_TOKEN }}"
+              "value": "Bearer {{ $env.MESSENGER_API_KEY }}"
             },
             {
               "name": "Content-Type",
@@ -49,10 +49,10 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  message: { text: $json.reply }\n}) }}"
+        "jsonBody": "={{ JSON.stringify({\n  subscriber_id: $json.senderId,\n  data: {\n    version: \"v2\",\n    content: {\n      messages: [\n        { type: \"text\", text: $json.reply }\n      ]\n    }\n  }\n}) }}"
       },
-      "id": "457dbc3b-7024-4a8b-9538-a8e5c8c1cebc",
-      "name": "Send Reply via Platform API",
+      "id": "f0eb4b86-47df-49e8-bc06-2225c6cc0f2d",
+      "name": "Send Reply via 3rd-Party Messenger API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
@@ -85,7 +85,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  direction: 'outbound',\n  body: $('Verify Rate Limit Caps').first().json.reply,\n  auto_sent: true\n}) }}"
       },
-      "id": "b6942a27-ccb7-427b-b928-021f47842d4b",
+      "id": "0f513d84-7821-4fff-9f86-37c7a37aab62",
       "name": "Update Message Sent in DB",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -97,9 +97,9 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ success: true, message: \"Reply dispatched\" }) }}"
+        "responseBody": "={{ JSON.stringify({ success: true, message: \"Reply dispatched via messenger platform\" }) }}"
       },
-      "id": "9b1253d4-daab-440c-969d-c03c2b29dbaf",
+      "id": "bff317d2-79a8-472e-b8b8-8770228077cd",
       "name": "Respond Dispatch Success",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
@@ -125,14 +125,14 @@
       "main": [
         [
           {
-            "node": "Send Reply via Platform API",
+            "node": "Send Reply via 3rd-Party Messenger API",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Send Reply via Platform API": {
+    "Send Reply via 3rd-Party Messenger API": {
       "main": [
         [
           {
@@ -159,11 +159,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "1703b238-dff4-48ac-a246-5488f2fd7b9e",
+  "versionId": "a2c8de81-7fee-49d7-b1e8-24ff10db595c",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "d7633d7c",
+  "id": "aaf3aa6a",
   "tags": []
 }

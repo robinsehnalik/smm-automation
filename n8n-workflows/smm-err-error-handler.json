@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {},
-      "id": "cf30aba5-ecb8-4575-ae01-f6dacc490f92",
+      "id": "61914c20-4c07-4cc3-8691-ecd699e22b59",
       "name": "SMM Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
@@ -17,7 +17,7 @@
         "language": "javaScript",
         "jsCode": "const err = $json.execution?.error || {};\nconst workflow = $json.workflow || {};\n\nreturn [{\n  json: {\n    workflowName: workflow.name,\n    nodeName: err.node?.name || 'Unknown Node',\n    message: err.message || 'Unknown runtime error',\n    executionId: $json.execution?.id\n  }\n}];"
       },
-      "id": "b0e41b00-c07d-4ee2-b5fd-a2c90af3e8b5",
+      "id": "fbd48ff6-27d1-4796-98d2-4c48ddead472",
       "name": "Format Error Record",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -51,7 +51,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  workflow_name: $json.workflowName,\n  node_name: $json.nodeName,\n  error_message: $json.message,\n  execution_id: $json.executionId\n}) }}"
       },
-      "id": "3429bae9-20a3-450a-a062-550577737bb0",
+      "id": "1ede43a4-308d-498b-9819-d37feb1f386b",
       "name": "Log Error to DB",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -81,7 +81,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  from: $env.SYSTEM_SENDER_EMAIL || \"alerts@yourdomain.com\",\n  to: [$env.ADMIN_NOTIFICATION_EMAIL],\n  subject: \"[ALERT] SMM Workflow Failure: \" + $json.workflowName,\n  html: `<p>Workflow <strong>${$json.workflowName}</strong> failed at node <strong>${$json.nodeName}</strong>:</p>\n<pre>${$json.message}</pre>`\n}) }}"
       },
-      "id": "75a696c5-a1d5-44a4-bb84-a0113d6ce062",
+      "id": "9c56fd7c-65e8-4573-8fa5-751ea703b787",
       "name": "Send SMM Error Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -130,11 +130,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "24308f2a-6f79-4e13-ab02-97eb8841f7ca",
+  "versionId": "6e7f889d-6929-4f90-91d5-0632bf7a6da5",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "34266b60",
+  "id": "cdce2308",
   "tags": []
 }

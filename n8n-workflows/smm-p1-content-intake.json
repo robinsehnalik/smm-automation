@@ -7,7 +7,7 @@
         "path": "smm/idea-intake",
         "responseMode": "responseNode"
       },
-      "id": "f59d8956-8867-4d66-a7c8-1ee34f91b2a6",
+      "id": "3e4f90bd-adb6-4980-8bd1-21426e0120be",
       "name": "Content Idea Intake Trigger",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -21,7 +21,7 @@
         "language": "javaScript",
         "jsCode": "const body = $json.body || $json;\n\nconst topic = (body.topic || '').trim();\nconst keyMessage = (body.key_message || body.message || '').trim();\nconst targetPlatforms = body.target_platforms || ['linkedin', 'x', 'instagram'];\nconst targetDate = body.target_date || new Date(Date.now() + 24*3600*1000).toISOString();\n\nif (!topic || !keyMessage) {\n  throw new Error(\"Topic and Key Message are required for content intake.\");\n}\n\nreturn [{\n  json: {\n    topic,\n    keyMessage,\n    targetPlatforms,\n    targetDate,\n    mediaRefs: body.media_refs || []\n  }\n}];"
       },
-      "id": "26b646c1-9245-411a-9316-9f12aa563128",
+      "id": "3c98e408-f94f-474b-9329-1bdb3c543056",
       "name": "Validate Content Idea",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -59,7 +59,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  topic: $json.topic,\n  key_message: $json.keyMessage,\n  target_platforms: $json.targetPlatforms,\n  target_date: $json.targetDate,\n  media_refs: $json.mediaRefs,\n  status: 'idea'\n}) }}"
       },
-      "id": "ac6f46a7-60e3-40c4-a07a-8a7be780b28f",
+      "id": "8e168ab9-e6d6-493c-8089-4d64dc13eb40",
       "name": "Insert Content Idea in DB",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -97,7 +97,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  idea_id: $json[0].id,\n  approval_policy: 'approve'\n}) }}"
       },
-      "id": "43e9c126-269d-4e15-b323-8701550406a7",
+      "id": "048ad441-2e39-43e0-b19f-fd81cc8ad7e5",
       "name": "Create Post Record",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -123,7 +123,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ postId: $json[0].id }) }}"
       },
-      "id": "7e2d7e87-0faf-41f8-b0d6-5c0f6ddfa886",
+      "id": "4fcfad15-2d9c-4de2-b76c-d3cdee26c2e3",
       "name": "Trigger SMM-P2 Variants",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -137,7 +137,7 @@
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ success: true, ideaId: $('Insert Content Idea in DB').first().json[0].id }) }}"
       },
-      "id": "fc575aa2-6fad-4456-bb7a-67b392f875e1",
+      "id": "38f1e815-fda4-4ac7-9e8f-21297bb157c9",
       "name": "Respond Intake OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
@@ -208,11 +208,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "826e176b-07dc-4b50-8dc2-a486e9727573",
+  "versionId": "67129104-01fd-4581-baec-0be17c72634e",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "92d02747",
+  "id": "6ebfaf6d",
   "tags": []
 }

@@ -7,8 +7,8 @@
         "path": "smm/events",
         "responseMode": "responseNode"
       },
-      "id": "f220618b-bad2-433b-8e5d-a463e810a01d",
-      "name": "Platform Webhook Intake",
+      "id": "b3c52719-643c-4636-ae15-e7e104e59a06",
+      "name": "3rd-Party Messenger Webhook Intake",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
@@ -19,10 +19,10 @@
     {
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const body = $json.body || {};\nconst platform = body.platform || 'meta';\nconst eventId = body.entry?.[0]?.id || body.event_id || ('evt_' + Date.now());\nconst senderId = body.sender?.id || body.user_id || 'user_anon';\nconst text = body.message?.text || body.comment_text || '';\n\nreturn [{\n  json: {\n    platform,\n    externalEventId: eventId,\n    senderId,\n    text,\n    eventType: body.type || 'comment'\n  }\n}];"
+        "jsCode": "const body = $json.body || $json;\n\n// Standardize payload across 3rd-party messaging platforms (ManyChat, Gorgias, Front, or social webhooks)\nconst platform = body.channel || body.platform || 'instagram';\nconst eventId = body.event_id || body.message_id || body.id || ('evt_' + Date.now());\nconst senderId = body.subscriber?.id || body.subscriber_id || body.sender_id || body.user_id || 'subscriber_anon';\nconst senderName = body.subscriber?.name || body.sender_name || body.user_name || 'Customer';\nconst text = body.message?.text || body.text || body.content || body.comment_text || '';\n\nif (!text) {\n  return [{ json: { skipped: true, reason: 'Empty message text' } }];\n}\n\nreturn [{\n  json: {\n    platform,\n    externalEventId: eventId.toString(),\n    senderId: senderId.toString(),\n    senderName,\n    text,\n    eventType: body.event_type || 'dm'\n  }\n}];"
       },
-      "id": "90f8e8a3-211f-41d4-94c8-42e1f39f8e74",
-      "name": "Verify & Dedupe Event",
+      "id": "77509ec3-48a8-4061-a77f-311af27ebd95",
+      "name": "Normalize Messenger Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -61,7 +61,7 @@
           ]
         }
       },
-      "id": "a2609f6a-c1eb-42af-a00b-c0d08a94d14e",
+      "id": "d250cc33-c5ba-4321-b2bb-682c19391674",
       "name": "Check Duplicate Event",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -81,7 +81,7 @@
           ]
         }
       },
-      "id": "f5e0545b-9026-4486-81a0-0b66976950e0",
+      "id": "11669edd-e220-4546-a4a0-a7715b1e2a9c",
       "name": "Is Duplicate?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
@@ -93,9 +93,9 @@
     {
       "parameters": {
         "language": "javaScript",
-        "jsCode": "return [{ json: { skipped: true } }];"
+        "jsCode": "return [{ json: { skipped: true, message: 'Duplicate event skipped' } }];"
       },
-      "id": "3615354c-58af-4c89-932d-a2374538f6e9",
+      "id": "f57cf172-2921-478b-b2cd-b9815b406458",
       "name": "Skip Duplicate Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -131,9 +131,9 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  direction: 'inbound',\n  event_type: $('Verify & Dedupe Event').first().json.eventType,\n  body: $('Verify & Dedupe Event').first().json.text,\n  external_event_id: $('Verify & Dedupe Event').first().json.externalEventId\n}) }}"
+        "jsonBody": "={{ JSON.stringify({\n  direction: 'inbound',\n  event_type: $('Normalize Messenger Event').first().json.eventType,\n  body: $('Normalize Messenger Event').first().json.text,\n  external_event_id: $('Normalize Messenger Event').first().json.externalEventId\n}) }}"
       },
-      "id": "fcc29358-4e81-4bc2-989f-2bb561e50406",
+      "id": "a21e2c12-8fdf-4d1c-9793-4a12f9cfbe66",
       "name": "Insert Inbound Message",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -157,9 +157,9 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ messageId: $json[0].id }) }}"
+        "jsonBody": "={{ JSON.stringify({ messageId: $json[0].id, senderId: $('Normalize Messenger Event').first().json.senderId }) }}"
       },
-      "id": "9d83d70f-260f-436c-bd54-b039c956b480",
+      "id": "cd1aee8d-1ea1-45e3-b44e-add23bd428f1",
       "name": "Trigger SMM-M2 Response Builder",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -173,7 +173,7 @@
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ success: true, handled: true }) }}"
       },
-      "id": "0e6f25e7-ef11-4347-9947-036e334ded6b",
+      "id": "abf526a1-9206-47dd-abf2-736cc29e4d10",
       "name": "Respond Webhook Handled",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
@@ -184,18 +184,18 @@
     }
   ],
   "connections": {
-    "Platform Webhook Intake": {
+    "3rd-Party Messenger Webhook Intake": {
       "main": [
         [
           {
-            "node": "Verify & Dedupe Event",
+            "node": "Normalize Messenger Event",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Verify & Dedupe Event": {
+    "Normalize Messenger Event": {
       "main": [
         [
           {
@@ -273,11 +273,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "d2b8e27d-e46d-4cb2-8626-7b288f86e129",
+  "versionId": "5b9d4d4f-68f5-4371-a0c1-e58b5b102b79",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "8dcd3e81",
+  "id": "4a5baf34",
   "tags": []
 }

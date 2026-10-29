@@ -1,23 +1,10 @@
 # Social Media Management (SMM) Automation — Implementation Guide & Overview
 
-> [!IMPORTANT]
-> ### ⚠️ Disclaimer & Production Recommendation: Use External Schedulers & Messaging Aggregators
->
-> While this repository includes direct integrations with native social media APIs (Meta Graph API for Instagram/Facebook, LinkedIn UGC API, and X API v2), **using approved third-party scheduling and messaging platforms is the STRONGLY RECOMMENDED workflow for production**.
->
-> **Why?**
-> 1. **Strict Permission Gating & App Reviews:** Major social platforms (especially Meta/Instagram and LinkedIn) enforce exhaustive, slow, and frequently rejected app review processes for publishing (`pages_manage_posts`, `instagram_content_publish`) and direct messaging permissions (`instagram_manage_messages`).
-> 2. **Sudden API Deprecation & Rate Limiting:** Platforms frequently alter API endpoints, impose tight quota throttling on independent developer apps, or block direct automated API calls to user-facing messaging endpoints.
-> 3. **Account Safety:** Automating direct posts or auto-replies via custom developer tokens carries a significant risk of trigger-happy shadowbanning or account suspension if platform algorithms detect non-whitelisted API patterns.
->
-> **Recommended Production Setup:**
-> - **Outbound Publishing (`SMM-P3`):** Route posts through established scheduling aggregators such as **Ayrshare, Buffer, Publer, or Metricool**. n8n sends an HTTP request with the generated copy and media assets to the scheduler API, which reliably manages official partner tokens, platform compliance, rate limits, and video/image transcoding.
-> - **Inbound Community Messaging (`SMM-M1` through `SMM-M4`):** Connect an official messaging platform like **ManyChat** (for Meta-approved 24h Instagram/Facebook DM automation) or a unified helpdesk such as **Gorgias, Zendesk, or Front**. Let ManyChat or Gorgias handle the webhook connection and messaging compliance, while n8n serves as the AI brain via webhooks (`SMM-M2`) to generate brand-grounded replies and safety evaluations.
-
----
-
 ## 1. System Overview
-The **Social Media Management (SMM) Automation** system operates two synchronized pipelines: an **Outbound Content Pipeline** (intake ideas, generate tailored copy per platform via LLM, enforce human review/approval, schedule and publish to LinkedIn, X, Meta) and an **Inbound Community Management Pipeline** (capture webhooks for comments and DMs, deduplicate events, evaluate brand risk and sentiment, and either auto-reply or escalate to human staff).
+The **Social Media Management (SMM) Automation** system operates two synchronized pipelines powered by **3rd-party social schedulers** (Ayrshare, Buffer, Publer) and **3rd-party messaging platforms** (ManyChat, Gorgias, Zendesk):
+
+1. **Outbound Content Pipeline**: Ingests content ideas, uses OpenAI (`gpt-4o`) to generate platform-native copy (LinkedIn, X, Instagram, Facebook), supports one-click dashboard approvals, and schedules/publishes posts via the 3rd-party scheduler API.
+2. **Inbound Community Management Pipeline**: Ingests DMs and comments via 3rd-party messaging webhooks, checks deduplication, analyzes sentiment & brand risk with LLM RAG, automatically responds to high-confidence inquiries via the messaging API, and escalates complaints or sensitive topics to human agents.
 
 ```
 PIPELINE A: Outbound Content Publishing
@@ -31,14 +18,20 @@ PIPELINE A: Outbound Content Publishing
                          [Review in Dashboard Queue]
                                        │
                                        ▼
-                       [SMM-P3 Scheduler & Publisher] ── Minute cron publishes
-                                       │                 (Direct API or Aggregator)
+                       [SMM-P3 Scheduler & Publisher]
+                                       │
                                        ▼
-                       [SMM-P4 Notifications & Metrics]
+                   [3rd-Party Scheduler API (Ayrshare / Buffer)]
+                                       │
+                                       ▼
+                     [Social Networks (LI, X, IG, FB)]
 
 PIPELINE B: Inbound Community Management
-[Social Webhook (DM / Comment)] ──► [SMM-M1 Event Trigger Intake]
-(Direct Webhook or ManyChat)                    │
+[Inbound Comment / DM] ──► [3rd-Party Messenger (ManyChat / Helpdesk)]
+                                                │
+                                                ▼
+                                  [SMM-M1 Event Trigger Intake]
+                                                │
                                                 ▼
                                    [SMM-M2 LLM Response Builder]
                                                 │
@@ -48,7 +41,9 @@ PIPELINE B: Inbound Community Management
                                │                                 │
                                ▼                                 ▼
                    [SMM-M3 Messenger Dispatch]      [SMM-M4 Human Escalation]
-                   (Direct API or ManyChat)         (Email or Helpdesk Ticket)
+                               │                                 │
+                               ▼                                 ▼
+                   [3rd-Party Messenger API]         [Email Alert + Handoff Tag]
 ```
 
 ---
@@ -59,12 +54,12 @@ PIPELINE B: Inbound Community Management
 | :--- | :--- | :--- | :--- |
 | [`smm-p1-content-intake.json`](./n8n-workflows/smm-p1-content-intake.json) | SMM-P1 Content Intake | Webhook (`POST /smm/idea-intake`) | Captures raw post idea, target platforms, and media URLs. |
 | [`smm-p2-llm-platform-variants.json`](./n8n-workflows/smm-p2-llm-platform-variants.json) | SMM-P2 LLM Platform Variants | Webhook (`POST /smm/variants`) | Generates platform-tailored copy, hashtags, and formatting. |
-| [`smm-p3-scheduler-publisher.json`](./n8n-workflows/smm-p3-scheduler-publisher.json) | SMM-P3 Scheduler & Publisher | Cron (`* * * * *` Every min) | Locks due posts and publishes via platform APIs or scheduling aggregators. |
-| [`smm-p4-notifications-metrics.json`](./n8n-workflows/smm-p4-notifications-metrics.json) | SMM-P4 Notifications & Metrics | Cron (`0 18 * * *` Daily) | Polls published posts and saves daily impression/engagement snapshots. |
-| [`smm-m1-event-trigger-intake.json`](./n8n-workflows/smm-m1-event-trigger-intake.json) | SMM-M1 Event Trigger Intake | Webhook (`POST /smm/events`) | Ingests platform comments/DMs (or ManyChat webhooks) and dedupes external IDs. |
-| [`smm-m2-llm-response-builder.json`](./n8n-workflows/smm-m2-llm-response-builder.json) | SMM-M2 LLM Response Builder | Webhook (`POST /smm/response-builder`) | Evaluates risk, generates reply draft, routes to auto-reply vs human. |
-| [`smm-m3-messenger-dispatch.json`](./n8n-workflows/smm-m3-messenger-dispatch.json) | SMM-M3 Messenger Dispatch | Webhook (`POST /smm/dispatch`) | Enforces hourly rate limits and dispatches reply to platform API. |
-| [`smm-m4-notifications-escalation.json`](./n8n-workflows/smm-m4-notifications-escalation.json) | SMM-M4 Notifications & Escalation | Webhook (`POST /smm/escalate`) | Alerts owner via email or opens ticket in helpdesk software. |
+| [`smm-p3-scheduler-publisher.json`](./n8n-workflows/smm-p3-scheduler-publisher.json) | SMM-P3 Scheduler & Publisher | Cron (`* * * * *` Every min) | Dispatches due posts to 3rd-party scheduler API (Ayrshare / Buffer). |
+| [`smm-p4-notifications-metrics.json`](./n8n-workflows/smm-p4-notifications-metrics.json) | SMM-P4 Notifications & Metrics | Cron (`0 18 * * *` Daily) | Syncs engagement analytics from scheduler API to Supabase. |
+| [`smm-m1-event-trigger-intake.json`](./n8n-workflows/smm-m1-event-trigger-intake.json) | SMM-M1 Event Trigger Intake | Webhook (`POST /smm/events`) | Ingests webhooks from ManyChat / Gorgias, normalizes and dedupes. |
+| [`smm-m2-llm-response-builder.json`](./n8n-workflows/smm-m2-llm-response-builder.json) | SMM-M2 LLM Response Builder | Webhook (`POST /smm/response-builder`) | Evaluates risk, generates grounded reply draft, routes to auto-reply vs human. |
+| [`smm-m3-messenger-dispatch.json`](./n8n-workflows/smm-m3-messenger-dispatch.json) | SMM-M3 Messenger Dispatch | Webhook (`POST /smm/dispatch`) | Dispatches approved reply via 3rd-party messaging platform API. |
+| [`smm-m4-notifications-escalation.json`](./n8n-workflows/smm-m4-notifications-escalation.json) | SMM-M4 Notifications & Escalation | Webhook (`POST /smm/escalate`) | Tags subscriber in messenger and alerts owner via email for human review. |
 | [`smm-err-error-handler.json`](./n8n-workflows/smm-err-error-handler.json) | SMM-ERR Error Handler | Error Trigger | Captures workflow failures and alerts system administrator. |
 
 ---
@@ -122,7 +117,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   external_event_id TEXT UNIQUE,
   direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
-  event_type TEXT DEFAULT 'comment',
+  event_type TEXT DEFAULT 'dm',
   body TEXT NOT NULL,
   auto_sent BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now()
@@ -143,42 +138,61 @@ CREATE TABLE IF NOT EXISTS workflow_log (
 
 ## 4. Environment Variables Configuration
 
+Configure these variables in your n8n `.env` or credentials vault:
+
 | Variable | Description | Example Value |
 | :--- | :--- | :--- |
 | `LINK_TO_YOUR_N8N_INSTANCE` | Host URL of n8n | `https://n8n.yourcompany.com` |
 | `LINK_TO_YOUR_SUPABASE_URL` | Supabase API endpoint | `https://xyzproject.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase Service Role key | `eyJhbGciOiJIUzI1NiIsIn...` |
 | `OPENAI_API_KEY` | OpenAI API key for `gpt-4o` | `sk-proj-...` |
-| `LINKEDIN_OAUTH_TOKEN` | LinkedIn Member or Page Access Token (Direct mode) | `AQV...` |
-| `LINKEDIN_ORGANIZATION_URN` | LinkedIn Organization URN | `urn:li:organization:12345678` |
-| `X_API_BEARER_TOKEN` | X (Twitter) API v2 Bearer token (Direct mode) | `AAAA...` |
-| `META_PAGE_ACCESS_TOKEN` | Meta Graph API Page Access Token (Direct mode) | `EAA...` |
+| `LINK_TO_YOUR_SCHEDULER_API` | 3rd-party scheduler API endpoint (Ayrshare/Buffer) | `https://app.ayrshare.com/api/post` |
+| `SCHEDULER_API_KEY` | API token for your social scheduler | `ayr_live_...` |
+| `LINK_TO_YOUR_MESSENGER_API` | 3rd-party messaging API endpoint (ManyChat/Gorgias) | `https://api.manychat.com/fb/sending/sendContent` |
+| `MESSENGER_API_KEY` | API token for your messaging platform | `manychat_bearer_...` |
 | `RESEND_API_KEY` | Resend API key for alerts | `re_...` |
-| `SYSTEM_SENDER_EMAIL` | Sender address | `social-alerts@yourdomain.com` |
-| `OWNER_NOTIFICATION_EMAIL` | Owner address for approvals/escalations | `owner@yourdomain.com` |
-| `ADMIN_NOTIFICATION_EMAIL` | Admin address for error alerts | `admin@yourdomain.com` |
-| `LINK_TO_YOUR_DASHBOARD` | Dashboard frontend URL | `https://dashboard.yourdomain.com` |
-
-> **Note for Aggregator Setup**: When using an external scheduler like Ayrshare or Buffer, replace `LINKEDIN_OAUTH_TOKEN`, `X_API_BEARER_TOKEN`, and `META_PAGE_ACCESS_TOKEN` with your aggregator API key (e.g., `AYRSHARE_API_KEY`), and point the HTTP Request node in `SMM-P3` directly to the aggregator's `/post` endpoint.
+| `SYSTEM_SENDER_EMAIL` | Sender address | `social-alerts@yourcompany.com` |
+| `OWNER_NOTIFICATION_EMAIL` | Owner address for approvals/escalations | `owner@yourcompany.com` |
+| `ADMIN_NOTIFICATION_EMAIL` | Admin address for error alerts | `admin@yourcompany.com` |
+| `LINK_TO_YOUR_DASHBOARD` | Dashboard frontend URL | `https://dashboard.yourcompany.com` |
 
 ---
 
 ## 5. Deployment & Testing Steps
 
 1. **Import & Activate Workflows**:
+   - In n8n, navigate to **Workflows > Import from File**.
    - Import all 9 JSON files from [`n8n-workflows/`](./n8n-workflows/).
    - Activate `SMM-ERR`, `SMM-P4`, `SMM-P3`, down to `SMM-P1`.
-2. **Submit Content Idea**:
+2. **Submit Content Idea (Posting Pipeline)**:
    ```bash
    curl -X POST "https://n8n.yourcompany.com/webhook/smm/idea-intake" \
      -H "Content-Type: application/json" \
      -d '{
-       "topic": "Automating Customer Support with AI Agents",
-       "key_message": "How modern teams cut resolution time by 70% using hybrid RAG and human escalation.",
+       "topic": "Scaling Customer Operations with AI Agents",
+       "key_message": "How modern companies resolve 70% of inbound DMs automatically while escalating sensitive issues to humans.",
        "target_platforms": ["linkedin", "x"]
      }'
    ```
-3. **Approve and Publish**:
-   - In Supabase `post_variants`, approve the generated variants by updating `status` to `scheduled` and setting `publish_at = now()`.
-   - Within 60 seconds, `SMM-P3` picks up the scheduled record, dispatches it to LinkedIn/X (or your external scheduler), and marks status as `published`.
-
+3. **Approve and Dispatch to Scheduler**:
+   - In Supabase `post_variants`, mark the approved variant with `status = 'scheduled'` and set `publish_at = now()`.
+   - Within 60 seconds, `SMM-P3` dispatches the post to your 3rd-party scheduler API (Ayrshare/Buffer) and sets `status = 'published'`.
+4. **Test Inbound Message (Messaging Pipeline)**:
+   ```bash
+   curl -X POST "https://n8n.yourcompany.com/webhook/smm/events" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "subscriber": {
+         "id": "sub_109283",
+         "name": "Jane Doe"
+       },
+       "message": {
+         "text": "Hello, do you offer custom enterprise pricing for your services?"
+       },
+       "channel": "instagram",
+       "event_type": "dm"
+     }'
+   ```
+5. **Verify AI Processing**:
+   - `SMM-M1` logs the inbound message in Supabase `messages`.
+   - `SMM-M2` processes the inquiry. Because pricing is a custom topic, it routes to `SMM-M4` for human escalation and alerts the team with a suggested AI draft.

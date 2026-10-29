@@ -12,7 +12,7 @@
           ]
         }
       },
-      "id": "9ec1eb21-2c77-489f-80a5-62bf0bc3a376",
+      "id": "a7f2d961-2aaf-4851-97eb-56bcfd2e8041",
       "name": "Every Minute Cron",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
@@ -60,7 +60,7 @@
           ]
         }
       },
-      "id": "8bc7b7c2-d026-449b-ae30-891688b04c3e",
+      "id": "709cc243-55a3-4f48-9679-d67e7cacfb82",
       "name": "Fetch Due Scheduled Variants",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -74,7 +74,7 @@
         "language": "javaScript",
         "jsCode": "const items = Array.isArray($json) ? $json : ($json.id ? [$json] : []);\nreturn items.map(i => ({ json: i }));"
       },
-      "id": "e7508a28-e9be-4437-a0d5-319a0e63a4f9",
+      "id": "d3231d9e-86ce-4352-bb38-cb10038d97cb",
       "name": "Split Due Variants",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -117,7 +117,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ status: 'publishing' }) }}"
       },
-      "id": "6b9ef8dd-40e1-4abb-86ca-57fee967d154",
+      "id": "53c35747-acc3-45f1-a07c-890901238220",
       "name": "Lock Variant Publishing",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -128,116 +128,32 @@
     },
     {
       "parameters": {
-        "rules": {
-          "values": [
+        "method": "POST",
+        "url": "={{ $env.LINK_TO_YOUR_SCHEDULER_API || 'https://app.ayrshare.com/api/post' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict"
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.platform }}",
-                    "rightValue": "linkedin",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    }
-                  }
-                ]
-              }
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SCHEDULER_API_KEY }}"
             },
             {
-              "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict"
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.platform }}",
-                    "rightValue": "x",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    }
-                  }
-                ]
-              }
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  post: $('Split Due Variants').first().json.body,\n  platforms: [$('Split Due Variants').first().json.platform],\n  mediaUrls: $('Split Due Variants').first().json.media_refs || []\n}) }}"
       },
-      "id": "e70a8ff1-44f7-49b2-984d-302bac3a00ce",
-      "name": "Route by Platform",
-      "type": "n8n-nodes-base.switch",
-      "typeVersion": 3,
+      "id": "a28d0e6a-2c8b-4d64-bcab-269da36dae96",
+      "name": "Publish via 3rd-Party Scheduler API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
       "position": [
         1060,
         300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://api.linkedin.com/v2/ugcPosts",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "Bearer {{ $env.LINKEDIN_OAUTH_TOKEN }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  author: $env.LINKEDIN_ORGANIZATION_URN || 'urn:li:organization:12345678',\n  lifecycleState: \"PUBLISHED\",\n  specificContent: {\n    \"com.linkedin.ugc.ShareContent\": {\n      shareCommentary: { text: $json.body },\n      shareMediaCategory: \"NONE\"\n    }\n  },\n  visibility: { \"com.linkedin.ugc.MemberNetworkVisibility\": \"PUBLIC\" }\n}) }}"
-      },
-      "id": "1274a106-f3df-47af-8080-8743b00ad45f",
-      "name": "Publish to LinkedIn",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        1300,
-        200
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://api.twitter.com/2/tweets",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "Bearer {{ $env.X_API_BEARER_TOKEN }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ text: $json.body }) }}"
-      },
-      "id": "2747707a-177d-4f60-85f7-9fc550191126",
-      "name": "Publish to X",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        1300,
-        420
       ]
     },
     {
@@ -272,14 +188,14 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  status: 'published',\n  platform_post_id: ($json.id || $json.data?.id || 'POST-' + Date.now()).toString()\n}) }}"
+        "jsonBody": "={{ JSON.stringify({\n  status: 'published',\n  platform_post_id: ($json.id || $json.postIds?.[0]?.id || 'SCHED-' + Date.now()).toString()\n}) }}"
       },
-      "id": "81615d10-75fb-4968-9a3b-07a28a239e6e",
+      "id": "be58a8ea-3722-4a2d-8f85-a5444658ce91",
       "name": "Update Variant Published",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        1540,
+        1300,
         300
       ]
     }
@@ -322,43 +238,14 @@
       "main": [
         [
           {
-            "node": "Route by Platform",
+            "node": "Publish via 3rd-Party Scheduler API",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Route by Platform": {
-      "main": [
-        [
-          {
-            "node": "Publish to LinkedIn",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Publish to X",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Publish to LinkedIn": {
-      "main": [
-        [
-          {
-            "node": "Update Variant Published",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Publish to X": {
+    "Publish via 3rd-Party Scheduler API": {
       "main": [
         [
           {
@@ -374,11 +261,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "d0de46f8-d807-4006-854d-7f096ab6170a",
+  "versionId": "d7652e4e-2f28-44c9-922c-682369b816a7",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "f151db32",
+  "id": "2047329e",
   "tags": []
 }

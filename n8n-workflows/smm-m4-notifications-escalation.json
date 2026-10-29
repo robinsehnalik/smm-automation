@@ -7,7 +7,7 @@
         "path": "smm/escalate",
         "responseMode": "responseNode"
       },
-      "id": "1477494e-b67e-4ac7-a7e9-b79b66e8c951",
+      "id": "fb14f88c-7796-45f3-8407-ed4dbfd28f5f",
       "name": "Escalation Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -47,7 +47,7 @@
           ]
         }
       },
-      "id": "6a7bb0f1-f525-4b8e-9bbf-3ba5ee3ec01f",
+      "id": "e66bec92-e6f9-48d4-968b-6f4d068a05c5",
       "name": "Fetch Original Inbound Message",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -77,7 +77,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({\n  from: $env.SYSTEM_SENDER_EMAIL || \"social-alerts@yourdomain.com\",\n  to: [$env.OWNER_NOTIFICATION_EMAIL],\n  subject: \"⚠️ Social Message Escalation Required\",\n  html: `<p>A customer interaction on social media requires human review:</p>\n<blockquote>${$json[0]?.body || 'Inbound message'}</blockquote>\n<p><strong>Suggested AI Draft:</strong></p>\n<blockquote>${$('Escalation Webhook').first().json.body.reply || 'None'}</blockquote>\n<p><a href=\\\"${$env.LINK_TO_YOUR_DASHBOARD || 'https://dashboard.yourdomain.com'}/smm/inbox\\\">Open Social Inbox</a></p>`\n}) }}"
       },
-      "id": "59673448-8372-4240-bc99-28e430a39153",
+      "id": "a1dda370-a8f3-4332-9896-eca3927b1c72",
       "name": "Alert Owner via Resend",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
@@ -91,7 +91,7 @@
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ success: true, escalated: true }) }}"
       },
-      "id": "70f570f1-f926-443f-a6bc-ed2d19cbf7e6",
+      "id": "a210c5b7-13d9-4646-a308-c0e6183e3d66",
       "name": "Respond Escalation Logged",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
@@ -140,11 +140,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "c6bedefa-a2a1-489b-86c3-f2b2d04d71cf",
+  "versionId": "1c625fc9-e16f-4985-87b3-20a614fcb7cf",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "b4d9edcc",
+  "id": "1ade2a08",
   "tags": []
 }

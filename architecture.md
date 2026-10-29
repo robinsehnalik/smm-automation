@@ -1,8 +1,7 @@
 # Automation Architecture — Social Media Management (SMM) System
 
-**Document Version:** 2.0.0  
-**Status:** Approved Simplified Architecture  
-**Author:** Principal Automation Architect and Systems Engineer  
+**Document Version:** 2.0
+**Author:** Robin Sehnalík
 
 ---
 
@@ -11,20 +10,24 @@
 The **Social Media Management (SMM) System** provides reliable, multi-network social posting and safe customer community triage by leveraging established 3rd-party platforms (**Ayrshare** for outbound scheduling and **ManyChat** for inbound messaging) coordinated through **n8n** and **Supabase**.
 
 ### 1. Architectural Refactoring & Problem Statement
+
 Previous iterations suffered from significant over-engineering and critical logic gaps:
+
 1. **Rebuilding the Scheduler on Top of a Scheduler**: The old design polled PostgreSQL every minute, applied row locks, and called publisher APIs at execution time (`SMM-P3`). Modern social schedulers (Ayrshare) natively accept a `scheduleDate` parameter. By pushing approved posts with a target schedule date at approval time, all database polling, row locks, worker queue congestion, and double-posting bugs are completely eliminated.
 2. **Duplicate Dashboard & Analytics Debt**: Building custom posting calendars, approval inboxes, and analytics sync workers (`SMM-P4`) reinvented features that Ayrshare, Airtable, and Notion already provide out of the box.
 3. **Unsafe Messaging Gaps**: The previous community responder lacked webhook signature authentication, relied on uncalibrated self-reported LLM confidence scores, suffered from infinite bot-to-bot loop risks, and critically lacked a **handoff state** (meaning the bot would talk over a human agent who had taken over the conversation).
 4. **Premature `pgvector` Complexity**: Managing chunking pipelines and vector databases for static social FAQs added latency and infrastructure costs when standard brand policies comfortably fit inside modern LLM context windows.
 
 ### 2. The Refactored Solution
+
 The modernized system decouples social management into two dedicated, low-complexity phases:
-* **Phase 1: Outbound Social Publishing (2 Workflows)**:
-  * **Tool Selected**: **Ayrshare API** (`https://app.ayrshare.com/api/post`).
-  * Ingests topics from Airtable/Notion, generates platform-specific variants (LinkedIn, X, Instagram) via OpenAI `gpt-4o`, enforces strict code-level character and media validation, and on human approval, dispatches directly to Ayrshare with `scheduleDate`.
-* **Phase 2: Safe Community Messaging (1 Consolidated Workflow)**:
-  * **Tool Selected**: **ManyChat API** (`https://api.manychat.com`).
-  * Ingests verified webhooks (`X-Webhook-Secret`), checks human handoff state in ManyChat (muting the bot if an agent is active), enforces loop protection (max 5 replies/hour), uses in-context cached prompt policies, and gates auto-replies behind a **strict intent allowlist**. Sensitive topics (complaints, refunds, legal) immediately trigger live agent takeover in ManyChat.
+
+- **Phase 1: Outbound Social Publishing (2 Workflows)**:
+  - **Tool Selected**: **Ayrshare API** (`https://app.ayrshare.com/api/post`).
+  - Ingests topics from Airtable/Notion, generates platform-specific variants (LinkedIn, X, Instagram) via OpenAI `gpt-4o`, enforces strict code-level character and media validation, and on human approval, dispatches directly to Ayrshare with `scheduleDate`.
+- **Phase 2: Safe Community Messaging (1 Consolidated Workflow)**:
+  - **Tool Selected**: **ManyChat API** (`https://api.manychat.com`).
+  - Ingests verified webhooks (`X-Webhook-Secret`), checks human handoff state in ManyChat (muting the bot if an agent is active), enforces loop protection (max 5 replies/hour), uses in-context cached prompt policies, and gates auto-replies behind a **strict intent allowlist**. Sensitive topics (complaints, refunds, legal) immediately trigger live agent takeover in ManyChat.
 
 ---
 
@@ -102,6 +105,7 @@ flowchart TD
 ## 3. Core Data Flows & Sequence Diagrams
 
 ### 3.1. Phase 1: Content Ingestion, Validation, and Scheduled Publishing
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -129,6 +133,7 @@ sequenceDiagram
 ```
 
 ### 3.2. Phase 2: Inbound Community Message Triage & Handoff Muting
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -168,17 +173,17 @@ sequenceDiagram
 
 ### 4.1. Phase 1 Workflows (Outbound Publishing)
 
-| File | Name | Trigger | Action & Validation |
-| :--- | :--- | :--- | :--- |
-| [`smm-post-01-variant-generator.json`](./n8n-workflows/smm-post-01-variant-generator.json) | SMM-POST-01 Variant Generator | Webhook / Airtable trigger | Generates LinkedIn, X, and IG variants via `gpt-4o`. **Code Validation**: X <= 280 chars, IG requires media and <= 30 hashtags, LinkedIn <= 3000 chars. |
-| [`smm-post-02-approval-dispatcher.json`](./n8n-workflows/smm-post-02-approval-dispatcher.json) | SMM-POST-02 Approval Dispatcher | Approval status change | Formats multi-platform overrides and dispatches directly to Ayrshare API (`POST /api/post`) with `scheduleDate`. Eliminates all polling and row-locking. |
+| File                                                                                           | Name                            | Trigger                    | Action & Validation                                                                                                                                      |
+| :--------------------------------------------------------------------------------------------- | :------------------------------ | :------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`smm-post-01-variant-generator.json`](./n8n-workflows/smm-post-01-variant-generator.json)     | SMM-POST-01 Variant Generator   | Webhook / Airtable trigger | Generates LinkedIn, X, and IG variants via `gpt-4o`. **Code Validation**: X <= 280 chars, IG requires media and <= 30 hashtags, LinkedIn <= 3000 chars.  |
+| [`smm-post-02-approval-dispatcher.json`](./n8n-workflows/smm-post-02-approval-dispatcher.json) | SMM-POST-02 Approval Dispatcher | Approval status change     | Formats multi-platform overrides and dispatches directly to Ayrshare API (`POST /api/post`) with `scheduleDate`. Eliminates all polling and row-locking. |
 
 ### 4.2. Phase 2 Workflows (Community Messaging & Support)
 
-| File | Name | Trigger | Action & Validation |
-| :--- | :--- | :--- | :--- |
+| File                                                                                 | Name                                 | Trigger          | Action & Validation                                                                                                                                                                                                      |
+| :----------------------------------------------------------------------------------- | :----------------------------------- | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`smm-msg-01-triage-pipeline.json`](./n8n-workflows/smm-msg-01-triage-pipeline.json) | SMM-MSG-01 Community Triage Pipeline | ManyChat Webhook | Verifies `X-Webhook-Secret`. Checks if human agent active or max replies reached (5/hr). Triage via cached prompt FAQ against strict **Intent Allowlist**. Sends safe reply or triggers live agent takeover in ManyChat. |
-| [`smm-err-error-handler.json`](./n8n-workflows/smm-err-error-handler.json) | SMM-ERR Global Error Handler | Error Trigger | Catches uncaught runtime exceptions across pipelines and alerts team via Resend email. |
+| [`smm-err-error-handler.json`](./n8n-workflows/smm-err-error-handler.json)           | SMM-ERR Global Error Handler         | Error Trigger    | Catches uncaught runtime exceptions across pipelines and alerts team via Resend email.                                                                                                                                   |
 
 ---
 
@@ -255,12 +260,12 @@ CREATE INDEX IF NOT EXISTS idx_social_msg_conv ON social_messages(conversation_i
 
 ## 7. Comparative Metrics: Legacy vs. Streamlined
 
-| Dimension | Legacy Over-Engineered Architecture | Streamlined Architecture |
-| :--- | :--- | :--- |
-| **Workflow Count** | 9 chained workflows + webhook hops | **3 decoupled workflows** + 1 error handler |
-| **Scheduler Architecture**| Custom 1-minute polling + DB row locks | **Direct Ayrshare API push with `scheduleDate`** |
-| **Double-Post Risk** | High (race conditions on polling worker) | **Eliminated** (Idempotent vendor scheduling) |
-| **Dashboards & Inboxes** | Custom calendar, inbox, and metrics tables | **Native Ayrshare Calendar + ManyChat Inbox** |
-| **Handoff Protection** | None (Bot talked over live human agents) | **Strict bot-muting state check** |
-| **Safety Gating** | Uncalibrated LLM confidence score (0.85) | **Deterministic Intent Allowlist** |
-| **Database Footprint** | 5 tables + pgvector + missing foreign keys | **3 normalized tables with foreign keys & indexes** |
+| Dimension                  | Legacy Over-Engineered Architecture        | Streamlined Architecture                            |
+| :------------------------- | :----------------------------------------- | :-------------------------------------------------- |
+| **Workflow Count**         | 9 chained workflows + webhook hops         | **3 decoupled workflows** + 1 error handler         |
+| **Scheduler Architecture** | Custom 1-minute polling + DB row locks     | **Direct Ayrshare API push with `scheduleDate`**    |
+| **Double-Post Risk**       | High (race conditions on polling worker)   | **Eliminated** (Idempotent vendor scheduling)       |
+| **Dashboards & Inboxes**   | Custom calendar, inbox, and metrics tables | **Native Ayrshare Calendar + ManyChat Inbox**       |
+| **Handoff Protection**     | None (Bot talked over live human agents)   | **Strict bot-muting state check**                   |
+| **Safety Gating**          | Uncalibrated LLM confidence score (0.85)   | **Deterministic Intent Allowlist**                  |
+| **Database Footprint**     | 5 tables + pgvector + missing foreign keys | **3 normalized tables with foreign keys & indexes** |

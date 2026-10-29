@@ -1,69 +1,37 @@
 {
-  "name": "SMM-ERR Error Handler",
+  "name": "SMM-ERR Global Error Handler",
   "nodes": [
     {
       "parameters": {},
-      "id": "61914c20-4c07-4cc3-8691-ecd699e22b59",
-      "name": "SMM Error Trigger",
+      "id": "a9c92585-bad5-43c4-8291-d23dfcbc33b2",
+      "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
       "position": [
-        100,
+        240,
         300
       ]
     },
     {
       "parameters": {
-        "language": "javaScript",
-        "jsCode": "const err = $json.execution?.error || {};\nconst workflow = $json.workflow || {};\n\nreturn [{\n  json: {\n    workflowName: workflow.name,\n    nodeName: err.node?.name || 'Unknown Node',\n    message: err.message || 'Unknown runtime error',\n    executionId: $json.execution?.id\n  }\n}];"
+        "mode": "runOnceForEachItem",
+        "jsCode": "const errorData = $input.item.json;\nconst execution = errorData.execution || {};\nconst workflow = errorData.workflow || {};\nconst error = errorData.execution?.error || {};\n\nreturn {\n  json: {\n    workflow_id: workflow.id || 'smm-pipeline',\n    workflow_name: workflow.name || 'SMM Pipeline',\n    node_name: error.node?.name || 'Unknown Node',\n    error_message: error.message || 'Unknown runtime error',\n    execution_id: execution.id || '',\n    occurred_at: new Date().toISOString()\n  }\n};"
       },
-      "id": "fbd48ff6-27d1-4796-98d2-4c48ddead472",
-      "name": "Format Error Record",
+      "id": "c4ed0462-3f9c-42cc-94bd-a783e5e56e22",
+      "name": "Format Error Incident",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        340,
+        480,
         300
       ]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ $env.LINK_TO_YOUR_SUPABASE_URL }}/rest/v1/workflow_log",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "apikey",
-              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
-            },
-            {
-              "name": "Authorization",
-              "value": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  workflow_name: $json.workflowName,\n  node_name: $json.nodeName,\n  error_message: $json.message,\n  execution_id: $json.executionId\n}) }}"
-      },
-      "id": "1ede43a4-308d-498b-9819-d37feb1f386b",
-      "name": "Log Error to DB",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        580,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
         "url": "https://api.resend.com/emails",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -78,47 +46,36 @@
           ]
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  from: $env.SYSTEM_SENDER_EMAIL || \"alerts@yourdomain.com\",\n  to: [$env.ADMIN_NOTIFICATION_EMAIL],\n  subject: \"[ALERT] SMM Workflow Failure: \" + $json.workflowName,\n  html: `<p>Workflow <strong>${$json.workflowName}</strong> failed at node <strong>${$json.nodeName}</strong>:</p>\n<pre>${$json.message}</pre>`\n}) }}"
+        "contentType": "json",
+        "body": "={\n  \"from\": \"{{ $env.SYSTEM_SENDER_EMAIL }}\",\n  \"to\": [\"{{ $env.ADMIN_NOTIFICATION_EMAIL }}\"],\n  \"subject\": \"[CRITICAL ALERT] SMM Automation Error in \" + $json.node_name,\n  \"html\": \"<h3>SMM Pipeline Execution Error</h3><p><strong>Workflow:</strong> \" + $json.workflow_name + \"</p><p><strong>Node:</strong> \" + $json.node_name + \"</p><p><strong>Error:</strong> \" + $json.error_message + \"</p><p><strong>Execution ID:</strong> \" + $json.execution_id + \"</p><p><strong>Timestamp:</strong> \" + $json.occurred_at + \"</p>\"\n}"
       },
-      "id": "9c56fd7c-65e8-4573-8fa5-751ea703b787",
-      "name": "Send SMM Error Alert",
+      "id": "cce1e562-8749-4fed-aed4-91e05718a199",
+      "name": "Send Admin Alert Email",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        820,
+        720,
         300
       ]
     }
   ],
   "connections": {
-    "SMM Error Trigger": {
+    "Error Trigger": {
       "main": [
         [
           {
-            "node": "Format Error Record",
+            "node": "Format Error Incident",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Format Error Record": {
+    "Format Error Incident": {
       "main": [
         [
           {
-            "node": "Log Error to DB",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Log Error to DB": {
-      "main": [
-        [
-          {
-            "node": "Send SMM Error Alert",
+            "node": "Send Admin Alert Email",
             "type": "main",
             "index": 0
           }
@@ -130,11 +87,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "6e7f889d-6929-4f90-91d5-0632bf7a6da5",
+  "versionId": "1a2993c0-3aaa-49d3-9d54-ff71f107fb54",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "automation-suite"
   },
-  "id": "cdce2308",
+  "id": "a37b6c8d",
   "tags": []
 }

@@ -1,20 +1,41 @@
 # Automation Architecture — Social Media Management (SMM) System
 
-The **SMM Automation** is a two-pipeline system built on **n8n**, **Supabase (Postgres + pgvector)**, an **LLM API**, **3rd-Party Social Schedulers** (such as Ayrshare, Buffer, or Publer), and **3rd-Party Social Messaging Platforms** (such as ManyChat, Gorgias, or Zendesk).
+**Document Version:** 2.0.0  
+**Status:** Approved Simplified Architecture  
+**Author:** Principal Automation Architect and Systems Engineer  
 
-- **Posting Pipeline**: Content ideas and posts live in a unified calendar. An LLM tailors each post per platform, team members review/approve, scheduled triggers dispatch to the 3rd-party social scheduler API, and delivery metrics are collected automatically.
-- **Messaging Pipeline**: Comments, direct messages (DMs), and mentions captured by the 3rd-party messaging platform trigger context-aware AI responses grounded in verified company data, delivered back through the messaging platform with escalation to human staff when needed.
+---
+
+## Executive Summary
+
+The **Social Media Management (SMM) System** provides reliable, multi-network social posting and safe customer community triage by leveraging established 3rd-party platforms (**Ayrshare** for outbound scheduling and **ManyChat** for inbound messaging) coordinated through **n8n** and **Supabase**.
+
+### 1. Architectural Refactoring & Problem Statement
+Previous iterations suffered from significant over-engineering and critical logic gaps:
+1. **Rebuilding the Scheduler on Top of a Scheduler**: The old design polled PostgreSQL every minute, applied row locks, and called publisher APIs at execution time (`SMM-P3`). Modern social schedulers (Ayrshare) natively accept a `scheduleDate` parameter. By pushing approved posts with a target schedule date at approval time, all database polling, row locks, worker queue congestion, and double-posting bugs are completely eliminated.
+2. **Duplicate Dashboard & Analytics Debt**: Building custom posting calendars, approval inboxes, and analytics sync workers (`SMM-P4`) reinvented features that Ayrshare, Airtable, and Notion already provide out of the box.
+3. **Unsafe Messaging Gaps**: The previous community responder lacked webhook signature authentication, relied on uncalibrated self-reported LLM confidence scores, suffered from infinite bot-to-bot loop risks, and critically lacked a **handoff state** (meaning the bot would talk over a human agent who had taken over the conversation).
+4. **Premature `pgvector` Complexity**: Managing chunking pipelines and vector databases for static social FAQs added latency and infrastructure costs when standard brand policies comfortably fit inside modern LLM context windows.
+
+### 2. The Refactored Solution
+The modernized system decouples social management into two dedicated, low-complexity phases:
+* **Phase 1: Outbound Social Publishing (2 Workflows)**:
+  * **Tool Selected**: **Ayrshare API** (`https://app.ayrshare.com/api/post`).
+  * Ingests topics from Airtable/Notion, generates platform-specific variants (LinkedIn, X, Instagram) via OpenAI `gpt-4o`, enforces strict code-level character and media validation, and on human approval, dispatches directly to Ayrshare with `scheduleDate`.
+* **Phase 2: Safe Community Messaging (1 Consolidated Workflow)**:
+  * **Tool Selected**: **ManyChat API** (`https://api.manychat.com`).
+  * Ingests verified webhooks (`X-Webhook-Secret`), checks human handoff state in ManyChat (muting the bot if an agent is active), enforces loop protection (max 5 replies/hour), uses in-context cached prompt policies, and gates auto-replies behind a **strict intent allowlist**. Sensitive topics (complaints, refunds, legal) immediately trigger live agent takeover in ManyChat.
 
 ---
 
 ## 1. Architectural Principles
 
-1. **Brand Consistency**: All copy generation is grounded in a stored **brand profile** (voice, do/don't guidelines, product catalog, FAQs). The LLM never improvises facts about the company.
-2. **Human Authorization Where It Matters**: Posts follow a configurable approval policy (`auto`, `approve-first`, or `approve-first-N`). Replies to sensitive topics (complaints, custom pricing, legal, refunds) always escalate to human staff.
-3. **Platform-Native Output**: One content idea produces multiple tailored variants, each matching target network specs (LinkedIn, X, Instagram, Facebook), length constraints, and hashtag norms.
-4. **Resilient Production Integrations via Certified 3rd-Party APIs**: Outbound publishing and inbound messaging utilize compliant, partner-tier 3rd-party schedulers (Ayrshare, Buffer, Publer) and messaging platforms (ManyChat, Gorgias). This completely eliminates custom platform app reviews, token expiration churn, sudden API deprecation breaks, and account suspension risks.
-5. **Idempotent Publishing & Delivery**: Posts and messages are deduplicated using external event IDs and database row locks, guaranteeing zero double-posts or duplicate customer replies.
-6. **End-to-End Observability**: Every generated variant, scheduler dispatch, and auto-reply is recorded in Supabase with full payload audit logs, latency tracking, and confidence scoring.
+1. **Leverage the Scheduler, Don't Rebuild It**: Posts are pushed to Ayrshare at approval time with `scheduleDate`. Ayrshare handles platform retries, media transcode/CDN upload, token refreshes, and delivery timing.
+2. **Strict Intent Allowlisting Over Uncalibrated Scores**: An LLM's self-reported confidence score (e.g. 0.85) is uncalibrated. Auto-replying is restricted strictly to an allowlist of deterministic intents (`business_hours`, `shipping_policy`, `catalog_link`, `returns_policy`, `general_faq`). Any complaint, refund demand, or price negotiation escalates to human staff.
+3. **Guaranteed Human Handoff Muting**: If a conversation is claimed by a human operator in ManyChat (`live_chat_status: "open"`) or marked paused in the database, the bot immediately aborts execution.
+4. **Code-Level Platform Validation**: Character constraints (280 for X, 3000 for LinkedIn) and platform requirements (**Instagram strictly requires image/video media**) are validated in code before approval.
+5. **In-Context Prompt Grounding**: Brand FAQs, policies, and tone are held directly in the prompt context, eliminating premature pgvector complexity.
+6. **Defense-in-Depth & Loop Protection**: All inbound webhooks verify secret tokens. Inbound user messages are capped at 5 automated replies per session to prevent bot-to-bot infinite loops and API quota drain.
 
 ---
 
@@ -22,232 +43,224 @@ The **SMM Automation** is a two-pipeline system built on **n8n**, **Supabase (Po
 
 ```mermaid
 flowchart TD
-    subgraph Operations["Operations & Review"]
-        Calendar["Posting Calendar (Dashboard)"]
-        Approve["Approval & Escalation Inbox"]
+    subgraph SchedUI["Operations & Planning (Airtable / Notion / Ayrshare)"]
+        Calendar["Content Calendar & Idea Intake"]
+        Approval["One-Click Approval Status"]
+        SchedulerDash["Ayrshare Native Analytics & Calendar"]
     end
 
-    subgraph Data["Supabase Postgres"]
-        Ideas[("content_ideas, posts, post_variants")]
-        Brand[("brand_profile, knowledge_chunks (pgvector)")]
-        Conv[("messages, post_metrics, workflow_log")]
+    subgraph Phase1["Phase 1: Outbound Publishing (Ayrshare)"]
+        P1["SMM-POST-01: Variant Generator\n(OpenAI gpt-4o + Code Validation)"]
+        P2["SMM-POST-02: Approval Dispatcher\n(Push to Ayrshare with scheduleDate)"]
     end
 
-    subgraph Posting["Outbound Posting Pipeline"]
-        P1["SMM-P1 Content Intake"]
-        P2["SMM-P2 LLM Platform Variants"]
-        P3["SMM-P3 Scheduler & Publisher"]
-        P4["SMM-P4 Notifications & Metrics"]
+    subgraph Phase2["Phase 2: Inbound Community Messaging (ManyChat)"]
+        M1["SMM-MSG-01: Community Triage Pipeline\n(Auth, Handoff Check, Intent Allowlist)"]
+        MError["SMM-ERR: Global Error Handler"]
     end
 
-    subgraph Messaging["Inbound Community Messaging Pipeline"]
-        M1["SMM-M1 Event Trigger Intake"]
-        M2["SMM-M2 LLM Response Builder"]
-        M3["SMM-M3 Messenger Dispatch"]
-        M4["SMM-M4 Notifications & Escalation"]
-    end
-
-    subgraph External["3rd-Party Service APIs"]
-        SchedulerAPI["3rd-Party Scheduler API\n(Ayrshare / Buffer / Publer)"]
-        MessengerAPI["3rd-Party Messenger API\n(ManyChat / Gorgias / Zendesk)"]
-    end
-
-    subgraph SocialNetworks["Social Media Channels"]
+    subgraph External["Production Services"]
+        AyrshareAPI["Ayrshare REST API (/api/post)"]
+        ManyChatAPI["ManyChat REST API (/fb/sending/sendContent)"]
+        AgentInbox["ManyChat Native Live Agent Inbox & Mobile Apps"]
         Networks["LinkedIn, X (Twitter), Instagram, Facebook"]
     end
 
-    Calendar -->|Create idea| P1
-    P1 -->|Store record| Ideas
-    P1 -->|Trigger| P2
-    P2 -->|Brand context| Brand
-    P2 -->|Store variants| Ideas
-    Ideas -->|Review & approve| Approve
-    P3 -->|Poll scheduled| Ideas
-    P3 -->|Dispatch post| SchedulerAPI
-    SchedulerAPI -->|Publish & syndicate| Networks
-    P4 -->|Sync analytics| SchedulerAPI
-    P4 -->|Save metrics| Conv
+    subgraph Data["Supabase PostgreSQL (Telemetry & State)"]
+        PostsTable[("social_posts (Variants, Schedule, Status)")]
+        ConvTable[("social_conversations (Handoff State & Loop Counter)")]
+        MsgTable[("social_messages (Audit Log & Intent)")]
+    end
 
-    Networks -->|DMs & Comments| MessengerAPI
-    MessengerAPI -->|Webhook event| M1
-    M1 -->|Dedupe & store| Conv
-    M1 -->|Trigger| M2
-    M2 -->|Retrieve facts| Brand
-    M2 -->|Safe reply| M3
-    M2 -->|Escalate / low confidence| M4
-    M3 -->|Send message| MessengerAPI
-    MessengerAPI -->|Deliver response| Networks
-    M4 -->|Alert team| Approve
+    %% Phase 1 Connections
+    Calendar -->|Row: ready_for_drafting| P1
+    P1 -->|Code Validation: Length & Media| PostsTable
+    PostsTable -->|Status: ready_for_approval| Approval
+    Approval -->|Status: approved| P2
+    P2 -->|POST /api/post with scheduleDate| AyrshareAPI
+    P2 -->|Save scheduler_post_id| PostsTable
+    AyrshareAPI -->|Scheduled Publish| Networks
+    AyrshareAPI -.->|Native Analytics| SchedulerDash
+
+    %% Phase 2 Connections
+    Networks -->|DMs & Comments| ManyChatAPI
+    ManyChatAPI -->|Signed Webhook Event| M1
+    M1 -->|Check Human Active & Rate Limit| ConvTable
+    M1 -->|Safe Allowlist Reply| ManyChatAPI
+    M1 -->|Sensitive / Escalate| AgentInbox
+    M1 -->|Update State & Audit| ConvTable
+    M1 -->|Log Message| MsgTable
+
+    %% Error Handling
+    P1 -.->|On Exception| MError
+    P2 -.->|On Exception| MError
+    M1 -.->|On Exception| MError
 ```
 
 ---
 
 ## 3. Core Data Flows & Sequence Diagrams
 
-### 3.1. Outbound Posting Pipeline
+### 3.1. Phase 1: Content Ingestion, Validation, and Scheduled Publishing
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Owner as Content Manager
-    participant DB as Supabase
-    participant P1 as SMM-P1 Intake
-    participant P2 as SMM-P2 LLM Variants
-    participant P3 as SMM-P3 Scheduler
-    participant Sched as 3rd-Party Scheduler API
+    actor Creator as Content Creator
+    participant N8N_P1 as n8n SMM-POST-01 (Generator)
+    participant LLM as OpenAI (gpt-4o)
+    participant DB as Supabase (social_posts)
+    actor Approver as Marketing Lead
+    participant N8N_P2 as n8n SMM-POST-02 (Dispatcher)
+    participant Ayrshare as Ayrshare API
     participant Networks as Social Networks
 
-    Owner->>P1: Submit topic, key message, target platforms
-    P1->>DB: Insert into content_ideas and posts
-    P1->>P2: Trigger variant generation
-    P2->>DB: Fetch post idea & brand guidelines
-    P2->>P2: LLM generates tailored copy per platform
-    P2->>DB: Save post_variants (status: pending_approval)
-    P2->>Owner: Notify: Variants ready for review
-    Owner->>DB: Approve variant & set publish_at date
-    Note over P3,DB: Cron runs every minute
-    P3->>DB: Select due variants & lock (status: publishing)
-    P3->>Sched: POST /api/post (platforms, copy, mediaUrls)
-    Sched->>Networks: Publish across LinkedIn, X, Meta
-    Sched-->>P3: Return scheduler_post_id & platform confirmation
-    P3->>DB: Update variant (status: published, platform_post_id)
+    Creator->>N8N_P1: Submits idea, key message, media URLs, schedule date
+    N8N_P1->>LLM: Generate platform variants (LinkedIn, X, Instagram)
+    LLM-->>N8N_P1: Returns JSON copy variants
+    N8N_P1->>N8N_P1: Validate: X <= 280 chars, IG has media, hashtags <= 30
+    N8N_P1->>DB: INSERT into social_posts (status: 'ready_for_approval')
+    Approver->>DB: Reviews variants in Airtable/Supabase, sets status = 'approved'
+    DB->>N8N_P2: Trigger: Post Approved
+    N8N_P2->>Ayrshare: POST /api/post { post, platforms, scheduleDate, mediaUrls }
+    Ayrshare-->>N8N_P2: Return { id: "ayr_9988", status: "scheduled" }
+    N8N_P2->>DB: UPDATE social_posts (scheduler_post_id: "ayr_9988", status: 'scheduled')
+    Note over Ayrshare,Networks: Zero Polling: Ayrshare publishes automatically at scheduleDate
+    Ayrshare->>Networks: Delivers posts to LinkedIn, X, and Instagram
 ```
 
-### 3.2. Inbound Community Messaging Pipeline
+### 3.2. Phase 2: Inbound Community Message Triage & Handoff Muting
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Social Audience
-    participant MsgTool as 3rd-Party Messenger (ManyChat / Helpdesk)
-    participant M1 as SMM-M1 Event Intake
-    participant DB as Supabase
-    participant M2 as SMM-M2 Response Builder
-    participant M3 as SMM-M3 Dispatch
-    actor Agent as Support Agent
+    actor User as Instagram / Facebook User
+    participant ManyChat as ManyChat Platform
+    participant N8N_M1 as n8n SMM-MSG-01 (Triage)
+    participant DB as Supabase (social_conversations)
+    participant LLM as OpenAI (gpt-4o)
+    actor Agent as Support Agent (ManyChat Inbox)
 
-    User->>MsgTool: Inbound DM or Post Comment
-    MsgTool->>M1: Webhook: { subscriber_id, channel, text, event_id }
-    M1->>DB: Check external_event_id deduplication
-    M1->>DB: Insert into messages (direction: inbound)
-    M1->>M2: Trigger response evaluation
-    M2->>DB: Retrieve relevant knowledge chunks & brand rules
-    M2->>M2: LLM evaluates sentiment, intent & computes confidence
-    alt High Confidence (>= 0.85) & Safe
-        M2->>M3: Trigger automated dispatch
-        M3->>MsgTool: POST /sending/sendContent (subscriber_id, text)
-        MsgTool->>User: Deliver reply in Instagram / Facebook / X DM
-        M3->>DB: Insert into messages (direction: outbound, auto_sent: true)
-    else Sensitive, Complaint, or Low Confidence (< 0.85)
-        M2->>DB: Log escalation event
-        M2->>Agent: Email alert with conversation context & suggested draft
-        M2->>MsgTool: Tag subscriber (needs_human_agent = true)
-        Agent->>MsgTool: Human agent handles conversation
-    end
+    User->>ManyChat: Sends DM: "What are your business hours?"
+    ManyChat->>N8N_M1: Webhook POST (headers: X-Webhook-Secret)
+    N8N_M1->>N8N_M1: Verify webhook secret (Reject if invalid)
+    N8N_M1->>DB: Query social_conversations (is_human_takeover, bot_reply_count)
+    DB-->>N8N_M1: { is_human_takeover: false, bot_reply_count: 1 }
+    N8N_M1->>LLM: Classify intent and evaluate against Allowlist
+    LLM-->>N8N_M1: JSON: { intent: "business_hours", is_safe_to_reply: true, reply_text: "..." }
+    N8N_M1->>ManyChat: POST /fb/sending/sendContent { subscriber_id, text }
+    ManyChat-->>User: Delivers reply in Instagram DM
+    N8N_M1->>DB: Upsert conversation (bot_reply_count: 2)
+
+    Note over User,Agent: Case 2: Sensitive Inquiry / Complaint
+    User->>ManyChat: "My package was damaged and I want a refund now!"
+    ManyChat->>N8N_M1: Webhook POST
+    N8N_M1->>LLM: Classify intent
+    LLM-->>N8N_M1: JSON: { intent: "complaint", is_safe_to_reply: false, escalation_reason: "Damage complaint" }
+    N8N_M1->>ManyChat: POST /subscriber/setCustomField { needs_human: true }
+    N8N_M1->>DB: UPDATE social_conversations (is_human_takeover: true)
+    Note over N8N_M1,ManyChat: Bot marks conversation claimed -> Bot is now SILENCED
+    ManyChat-->>Agent: Desktop / Mobile push notification: Live Agent Takeover
+    Agent->>ManyChat: Agent takes over and replies directly to user
 ```
 
 ---
 
-## 4. Workflow Catalog (n8n)
+## 4. Workflow Specifications
 
-| Workflow ID | Workflow Name | Trigger | Actions | Downstream Call |
-| :--- | :--- | :--- | :--- | :--- |
-| **SMM-P1** | Content Intake | Webhook (`POST /smm/idea-intake`) | Validates idea, inserts into `content_ideas` & `posts`. | `SMM-P2` |
-| **SMM-P2** | LLM Platform Variants | Webhook (`POST /smm/variants`) | LLM tailors copy per platform; saves `post_variants`; notifies owner. | Dashboard Review |
-| **SMM-P3** | Scheduler & Publisher | Cron (`* * * * *` Every minute) | Polls due variants, locks row, calls 3rd-Party Scheduler API, records published status. | 3rd-Party Scheduler API |
-| **SMM-P4** | Notifications & Metrics | Cron (`0 18 * * *` Daily) | Syncs post impressions & engagements from Scheduler API to `post_metrics`. | Resend / Dashboard |
-| **SMM-M1** | Event Trigger Intake | Webhook (`POST /smm/events`) | Ingests 3rd-party messenger webhooks, normalizes payload, dedupes, saves to `messages`. | `SMM-M2` |
-| **SMM-M2** | LLM Response Builder | Webhook (`POST /smm/response-builder`) | Semantic RAG lookup, assesses sentiment, calculates confidence score, routes branch. | `SMM-M3` or `SMM-M4` |
-| **SMM-M3** | Messenger Dispatch | Webhook (`POST /smm/dispatch`) | Enforces rate caps, dispatches approved reply via 3rd-Party Messenger API, logs message. | 3rd-Party Messenger API |
-| **SMM-M4** | Notifications & Escalation | Webhook (`POST /smm/escalate`) | Tags subscriber in messaging tool, emails owner conversation context and AI draft. | Resend Email |
-| **SMM-ERR** | Error Handler | Error Trigger | Traps execution errors across pipelines, logs to `workflow_log`, emails admin. | Resend Email |
+### 4.1. Phase 1 Workflows (Outbound Publishing)
+
+| File | Name | Trigger | Action & Validation |
+| :--- | :--- | :--- | :--- |
+| [`smm-post-01-variant-generator.json`](./n8n-workflows/smm-post-01-variant-generator.json) | SMM-POST-01 Variant Generator | Webhook / Airtable trigger | Generates LinkedIn, X, and IG variants via `gpt-4o`. **Code Validation**: X <= 280 chars, IG requires media and <= 30 hashtags, LinkedIn <= 3000 chars. |
+| [`smm-post-02-approval-dispatcher.json`](./n8n-workflows/smm-post-02-approval-dispatcher.json) | SMM-POST-02 Approval Dispatcher | Approval status change | Formats multi-platform overrides and dispatches directly to Ayrshare API (`POST /api/post`) with `scheduleDate`. Eliminates all polling and row-locking. |
+
+### 4.2. Phase 2 Workflows (Community Messaging & Support)
+
+| File | Name | Trigger | Action & Validation |
+| :--- | :--- | :--- | :--- |
+| [`smm-msg-01-triage-pipeline.json`](./n8n-workflows/smm-msg-01-triage-pipeline.json) | SMM-MSG-01 Community Triage Pipeline | ManyChat Webhook | Verifies `X-Webhook-Secret`. Checks if human agent active or max replies reached (5/hr). Triage via cached prompt FAQ against strict **Intent Allowlist**. Sends safe reply or triggers live agent takeover in ManyChat. |
+| [`smm-err-error-handler.json`](./n8n-workflows/smm-err-error-handler.json) | SMM-ERR Global Error Handler | Error Trigger | Catches uncaught runtime exceptions across pipelines and alerts team via Resend email. |
 
 ---
 
-## 5. Database Schema (Supabase)
+## 5. Database Architecture & Schema (Supabase)
+
+The database is streamlined from 5 redundant tables down to **3 clean tables**:
 
 ```sql
--- 1. Content Ideas & Posts
-CREATE TABLE IF NOT EXISTS content_ideas (
+-- 1. Social Posts Table (Unified Ideas & Platform Variants)
+CREATE TABLE IF NOT EXISTS social_posts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  topic TEXT NOT NULL,
+  title TEXT NOT NULL,
   key_message TEXT NOT NULL,
-  target_platforms TEXT[] DEFAULT '{linkedin,x}',
-  target_date TIMESTAMPTZ,
-  media_refs TEXT[] DEFAULT '{}',
-  status TEXT DEFAULT 'idea',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS posts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  idea_id UUID REFERENCES content_ideas(id) ON DELETE CASCADE,
-  approval_policy TEXT DEFAULT 'approve',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 2. Platform variants
-CREATE TABLE IF NOT EXISTS post_variants (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  post_id UUID REFERENCES posts(id) ON DELETE CASCADE,
-  platform TEXT NOT NULL CHECK (platform IN ('linkedin', 'x', 'instagram', 'facebook')),
-  body TEXT NOT NULL,
-  publish_at TIMESTAMPTZ,
-  status TEXT DEFAULT 'pending_approval' CHECK (status IN ('pending_approval', 'scheduled', 'publishing', 'published', 'failed')),
-  platform_post_id TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 3. Post metrics snapshot
-CREATE TABLE IF NOT EXISTS post_metrics (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  variant_id TEXT NOT NULL,
-  impressions INT DEFAULT 0,
-  likes INT DEFAULT 0,
-  comments INT DEFAULT 0,
-  shares INT DEFAULT 0,
-  snapshot_date DATE DEFAULT CURRENT_DATE,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 4. Inbound & outbound social messages
-CREATE TABLE IF NOT EXISTS messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  external_event_id TEXT UNIQUE,
-  direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
-  event_type TEXT DEFAULT 'dm',
-  body TEXT NOT NULL,
-  auto_sent BOOLEAN DEFAULT false,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 5. Central workflow error log
-CREATE TABLE IF NOT EXISTS workflow_log (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workflow_name TEXT NOT NULL,
-  node_name TEXT,
+  media_urls JSONB DEFAULT '[]'::jsonb,
+  target_platforms JSONB NOT NULL DEFAULT '["linkedin", "twitter", "instagram"]'::jsonb,
+  variants JSONB DEFAULT '{}'::jsonb, -- { "linkedin": "...", "twitter": "...", "instagram": "..." }
+  status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'ready_for_approval', 'approved', 'scheduled', 'published', 'failed')),
+  scheduled_for TIMESTAMPTZ,
+  scheduler_post_id TEXT, -- ID returned by Ayrshare API
   error_message TEXT,
-  execution_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 2. Social Conversations & Handoff State (ManyChat / Instagram / WhatsApp)
+CREATE TABLE IF NOT EXISTS social_conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  subscriber_id TEXT UNIQUE NOT NULL, -- ManyChat subscriber ID
+  platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'whatsapp', 'telegram')),
+  is_human_takeover BOOLEAN DEFAULT false,
+  paused_until TIMESTAMPTZ,
+  bot_reply_count INTEGER DEFAULT 0,
+  last_interaction_at TIMESTAMPTZ DEFAULT now(),
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 3. Social Messages (Telemetry & Audit)
+CREATE TABLE IF NOT EXISTS social_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES social_conversations(id) ON DELETE CASCADE,
+  external_message_id TEXT UNIQUE NOT NULL,
+  sender_type TEXT NOT NULL CHECK (sender_type IN ('subscriber', 'bot', 'agent')),
+  intent TEXT,
+  content TEXT NOT NULL,
+  status TEXT DEFAULT 'delivered' CHECK (status IN ('delivered', 'escalated', 'quarantined', 'failed')),
+  token_usage JSONB DEFAULT '{}'::jsonb,
+  latency_ms INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Performance & Query Indexes
+CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status);
+CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled_for ON social_posts(scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_social_conv_subscriber ON social_conversations(subscriber_id);
+CREATE INDEX IF NOT EXISTS idx_social_msg_conv ON social_messages(conversation_id);
 ```
 
 ---
 
-## 6. External Integrations
+## 6. Security & Safety Guardrails
 
-| Service | Role | Used By |
-| :--- | :--- | :--- |
-| **3rd-Party Social Scheduler API** (Ayrshare, Buffer, Publer, Metricool) | Multi-network post publishing, rate-limit management, media transcoding, analytics | `SMM-P3`, `SMM-P4` |
-| **3rd-Party Social Messenger API** (ManyChat, Gorgias, Zendesk, Front) | Capturing inbound DMs/comments, managing 24h compliance window, sending replies | `SMM-M1`, `SMM-M3`, `SMM-M4` |
-| **LLM API** (OpenAI `gpt-4o`) | Multi-platform copy variants, intent & sentiment classification, grounded response generation | `SMM-P2`, `SMM-M2` |
-| **Supabase (Postgres + pgvector)** | Central state store, content calendar, interaction history, semantic knowledge chunks | All workflows |
-| **Transactional Email** (Resend) | Approval ready alerts, human escalation notifications, system failure alerts | `SMM-P2`, `SMM-M4`, `SMM-ERR` |
-| **Operations Dashboard** | Review queue for variants, conversation monitoring, knowledge base curation | Owner / Agents |
+1. **Webhook Signature & Secret Verification**:
+   The `/smm/manychat-webhook` endpoint strictly authenticates the `X-Webhook-Secret` header before any payload processing. Unauthenticated calls are rejected with 401 Unauthorized.
+2. **Deterministic Intent Allowlist**:
+   Auto-replies are restricted to safe, factual inquiries (`business_hours`, `shipping_policy`, `catalog_link`, `returns_policy`, `general_faq`). Sensitive topics (complaints, damage reports, pricing negotiation, legal threats) automatically escalate to human operators.
+3. **Guaranteed Bot Muting on Human Handoff**:
+   The workflow checks both ManyChat's live chat status and Supabase's `is_human_takeover` flag. Once an agent claims a conversation, the bot is immediately silenced to prevent talking over human team members.
+4. **Loop Protection & Spend Cap**:
+   Automated replies are strictly throttled to a maximum of 5 replies per user session to eliminate bot-to-bot recursion and prevent LLM API cost drain.
+5. **Code-Level Pre-Flight Validation**:
+   Character limits (X <= 280) and media rules (Instagram requires image/video) are validated in JavaScript code rather than trusting the LLM to follow instructions.
 
 ---
 
-## 7. Security & Reliability Architecture
+## 7. Comparative Metrics: Legacy vs. Streamlined
 
-- **Retrieval-Grounded Responses**: The response engine accesses only indexed company knowledge chunks and official brand parameters. If confidence falls below 0.85 or retrieval returns low relevance, the message is routed to human escalation.
-- **Prompt-Injection Defense**: Inbound messages from external users are treated as untrusted text, delimited safely in prompts, and prevented from invoking tools or rewriting instructions.
-- **Deduplication Safeguards**: Inbound events are indexed by unique `external_event_id` keys in Supabase, preventing duplicate processing even if webhooks retry.
-- **Rate-Limiting & Quotas**: Schedulers and messenger dispatchers enforce throttling to ensure full compliance with platform rules.
+| Dimension | Legacy Over-Engineered Architecture | Streamlined Architecture |
+| :--- | :--- | :--- |
+| **Workflow Count** | 9 chained workflows + webhook hops | **3 decoupled workflows** + 1 error handler |
+| **Scheduler Architecture**| Custom 1-minute polling + DB row locks | **Direct Ayrshare API push with `scheduleDate`** |
+| **Double-Post Risk** | High (race conditions on polling worker) | **Eliminated** (Idempotent vendor scheduling) |
+| **Dashboards & Inboxes** | Custom calendar, inbox, and metrics tables | **Native Ayrshare Calendar + ManyChat Inbox** |
+| **Handoff Protection** | None (Bot talked over live human agents) | **Strict bot-muting state check** |
+| **Safety Gating** | Uncalibrated LLM confidence score (0.85) | **Deterministic Intent Allowlist** |
+| **Database Footprint** | 5 tables + pgvector + missing foreign keys | **3 normalized tables with foreign keys & indexes** |
